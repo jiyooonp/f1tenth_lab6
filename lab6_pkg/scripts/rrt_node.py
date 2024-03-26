@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 This file contains the class definition for tree nodes and RRT
 Before you start, please read: https://arxiv.org/pdf/1105.1186.pdf
@@ -17,11 +18,17 @@ from nav_msgs.msg import Odometry
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from nav_msgs.msg import OccupancyGrid
 
+from occupancy_grid import OccupancyGridPublisher
+
+from tf2_ros import TransformBroadcaster
+from geometry_msgs.msg import Quaternion, TransformStamped, Twist
+
+
 # TODO: import as you need
 
 # class def for tree nodes
 # It's up to you if you want to use this
-class Node(object):
+class MyNode(object):
     def __init__(self):
         self.x = None
         self.y = None
@@ -32,6 +39,7 @@ class Node(object):
 # class def for RRT
 class RRT(Node):
     def __init__(self):
+        super().__init__('rrt_node')
         # topics, not saved as attributes
         # TODO: grab topics from param file, you'll need to change the yaml file
         pose_topic = "ego_racecar/odom"
@@ -47,22 +55,30 @@ class RRT(Node):
             pose_topic,
             self.pose_callback,
             1)
-        self.pose_sub_
 
         self.scan_sub_ = self.create_subscription(
             LaserScan,
             scan_topic,
             self.scan_callback,
             1)
-        self.scan_sub_
 
         # publishers
         # TODO: create a drive message publisher, and other publishers that you might need
 
         # class attributes
         # TODO: maybe create your occupancy grid here
+        self.publisher_ = self.create_publisher(
+            OccupancyGrid, '/occupancy_grid', 10)
+        self.grid_resolution = 0.1  # meters per cell
+        self.grid_size = 150
+        self.grid = np.zeros((self.grid_size, self.grid_size),
+                             dtype=np.int8)  # Occupancy grid data
+        self.angular = Twist().angular
 
-    def scan_callback(self, scan_msg):
+        # Transformation broadcaster for setting the orientation
+        self.tf_broadcaster = TransformBroadcaster(self)
+
+    def scan_callback(self, msg):
         """
         LaserScan callback, you should update your occupancy grid here
 
@@ -71,6 +87,86 @@ class RRT(Node):
         Returns:
 
         """
+        angles = np.arange(msg.angle_min, msg.angle_max, msg.angle_increment)
+        ranges = np.array(msg.ranges)
+
+        # Convert ranges to x, y coordinates
+        x_coords = ranges * np.cos(angles)
+        y_coords = ranges * -np.sin(angles)
+
+        # Convert coordinates to grid indices
+        grid_x = np.clip(np.floor((x_coords / self.grid_resolution) +
+                         (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+        grid_y = np.clip(np.floor((y_coords / self.grid_resolution) +
+                         (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+
+        # Update occupancy grid
+        self.grid.fill(0)
+        self.grid[grid_x, grid_y] = 100  # Mark occupied cells as 100
+
+        # Publish occupancy grid
+        self.publish_grid()
+
+    def publish_grid(self):
+        occupancy_grid_msg = OccupancyGrid()
+        occupancy_grid_msg.header.stamp = self.get_clock().now().to_msg()
+        occupancy_grid_msg.header.frame_id = 'ego_racecar/base_link'
+        occupancy_grid_msg.info.map_load_time = self.get_clock().now().to_msg()
+        occupancy_grid_msg.info.resolution = self.grid_resolution
+        occupancy_grid_msg.info.width = self.grid_size
+        occupancy_grid_msg.info.height = self.grid_size
+        occupancy_grid_msg.info.origin.position.x = - \
+            self.grid_size / 2 * self.grid_resolution
+        occupancy_grid_msg.info.origin.position.y = - \
+            self.grid_size / 2 * self.grid_resolution
+        occupancy_grid_msg.info.origin.position.z = 0.0
+
+        # Set the orientation using a Quaternion
+        angular_x = self.angular.x
+        angular_y = self.angular.y
+        angular_z = self.angular.z
+
+        roll = 0.0
+        pitch = 0.0
+        yaw = math.atan2(angular_y, angular_x)
+        q = self.euler_to_quaternion(roll, pitch, yaw)
+        occupancy_grid_msg.info.origin.orientation = q
+
+        # Rotate the grid data based on the car's orientation
+        rotated_grid = np.rot90(self.grid, k=1)  # Rotate 180 degrees
+
+        occupancy_grid_msg.data = np.ravel(rotated_grid).tolist()
+
+        self.publisher_.publish(occupancy_grid_msg)
+
+        # Broadcast the transform with the corrected orientation
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = 'ego_racecar/base_link'
+        transform.child_frame_id = 'ego_racecar/base_link'
+        transform.transform.rotation = q
+        self.tf_broadcaster.sendTransform(transform)
+
+    def euler_to_quaternion(self, roll, pitch, yaw):
+        cy = math.cos(yaw * 0.5)
+        sy = math.sin(yaw * 0.5)
+        cp = math.cos(pitch * 0.5)
+        sp = math.sin(pitch * 0.5)
+        cr = math.cos(roll * 0.5)
+        sr = math.sin(roll * 0.5)
+
+        qw = cy * cp * cr + sy * sp * sr
+        qx = cy * cp * sr - sy * sp * cr
+        qy = sy * cp * sr + cy * sp * cr
+        qz = sy * cp * cr - cy * sp * sr
+
+        quaternion = Quaternion()
+        quaternion.w = qw
+        quaternion.x = qx
+        quaternion.y = qy
+        quaternion.z = qz
+
+        return quaternion
 
     def pose_callback(self, pose_msg):
         """
