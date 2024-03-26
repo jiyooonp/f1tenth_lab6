@@ -58,19 +58,16 @@ class MyNode(object):
 
 # class def for RRT
 class RRT(Node):
+
     def __init__(self):
         super().__init__('rrt_node')
+
         # topics, not saved as attributes
-        # TODO: grab topics from param file, you'll need to change the yaml file
         pose_topic = "ego_racecar/odom"
         scan_topic = "/scan"
 
-        # you could add your own parameters to the rrt_params.yaml file,
-        # and get them here as class attributes as shown above.
-
-        # TODO: create subscribers
+        # Subscribers
         self.pose_sub_ = self.create_subscription(
-            #PoseStamped,
             Odometry,
             pose_topic,
             self.pose_callback,
@@ -82,11 +79,20 @@ class RRT(Node):
             self.scan_callback,
             1)
 
-        # publishers
-        # TODO: create a drive message publisher, and other publishers that you might need
+        # Publishers
         self.goal_publisher = self.create_publisher(
             PointStamped, '/local_goal', 10)
         
+        self.drive_pub = self.create_publisher(
+            AckermannDriveStamped,
+            '/drive',
+            10)
+    
+        # Visualization
+        self.publisher_ = self.create_publisher(
+            OccupancyGrid, 
+            '/occupancy_grid', 
+            10)
         self.random_point_pub = self.create_publisher(
             Marker,
             '/random_point',
@@ -103,50 +109,42 @@ class RRT(Node):
             MarkerArray,
             '/marker_array',
             10)
-        self.drive_pub = self.create_publisher(
-            AckermannDriveStamped,
-            '/drive',
-            10)
-        self.marker_history = []
         
+        self.marker_history = []
 
-        # class attributes
-        # TODO: maybe create your occupancy grid here
-        self.publisher_ = self.create_publisher(
-            OccupancyGrid, '/occupancy_grid', 10)
+        # Occupancy grid variables
         self.grid_resolution = 0.1  # meters per cell
         self.grid_size = 30
-        self.grid = np.zeros((self.grid_size, self.grid_size),
-                             dtype=np.int8)  # Occupancy grid data
-        self.angular = Twist().angular
+        self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8) 
 
-        self.occupancy_grid = np.zeros((self.grid_size, self.grid_size),
-                                        dtype=np.int8)  # Occupancy grid data
-        
         self.local_goal = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
         
         # Transformation broadcaster for setting the orientation
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.angular = Twist().angular
 
         # RRT variables
+        self.move_percentage = 0.2
+
+        self.clean_grid()
+
+        # Driving variables
+        self.L = 1.0
+        self.speed = 0.2
+        self.steering_angle = 0.0
+        self.max_steering_angle = np.pi / 3
+
+    def clean_grid(self):
+
         self.tree = MyTree()
+
+        # Initialize the tree with the initial point
         initial_point = MyPoint()
         initial_point.x = self.grid_size * self.grid_resolution / 2
         initial_point.y = self.grid_size * self.grid_resolution / 2
         initial_point.id = 0
         initial_point.parent = None
         self.tree.vertices[0] = initial_point
-
-
-        self.move_percentage = 0.2
-
-        # Driving 
-        self.L = 1.0
-        self.speed = 0.2
-        self.steering_angle = 0.0
-        self.max_steering_angle = np.pi / 3
-
-
 
     def scan_callback(self, msg):
         """
@@ -180,8 +178,8 @@ class RRT(Node):
         # publish the local goal
         self.publish_goal(self.local_goal)
 
-
     def publish_grid(self):
+
         occupancy_grid_msg = OccupancyGrid()
         occupancy_grid_msg.header.stamp = self.get_clock().now().to_msg()
         occupancy_grid_msg.header.frame_id = 'ego_racecar/base_link'
@@ -210,7 +208,7 @@ class RRT(Node):
         rotated_grid = np.rot90(self.grid, k=1)  # Rotate 180 degrees
 
         # Update the occupancy grid with the rotated grid
-        self.occupancy_grid = rotated_grid
+        self.grid = rotated_grid
 
         occupancy_grid_msg.data = np.ravel(rotated_grid).tolist()
 
@@ -291,7 +289,8 @@ class RRT(Node):
         marker_array = MarkerArray(markers=self.marker_history)
         self.marker_array_pub.publish(marker_array)
 
-    def publish_line_strip(self, point1, point2):
+    def publish_line_strip(self, points):
+
         marker = Marker()
         marker.header.frame_id = 'ego_racecar/base_link'  # Change to your desired frame
         marker.header.stamp = self.get_clock().now().to_msg()
@@ -305,10 +304,11 @@ class RRT(Node):
         marker.color.a = 1.0  # Fully opaque
 
         # Define the line strip points
-        marker.points.append(point1)
-        marker.points.append(point2)
+        for point in points:
+            marker.points.append(point)
 
         self.target_line_pub.publish(marker)
+
     def euler_to_quaternion(self, roll, pitch, yaw):
         cy = math.cos(yaw * 0.5)
         sy = math.sin(yaw * 0.5)
@@ -341,9 +341,8 @@ class RRT(Node):
 
         """
         self.pose_msg = pose_msg
-        self.sample()
+        self.sample_free_space()
 
-        return None
     def is_straight_line_clear(self, grid, a1, b1, a2, b2):
         # Convert coordinates to integers
         a1 = int(a1)
@@ -375,11 +374,12 @@ class RRT(Node):
                 p_inc += 2 * dx
         return True
 
-    def sample(self):
+    def sample_free_space(self):
         """
         This method should randomly sample the free space, and returns a viable point
 
         """
+
         while True:
 
             random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
@@ -389,7 +389,7 @@ class RRT(Node):
             curr_x = self.grid_size * self.grid_resolution / 2
             curr_y = self.grid_size * self.grid_resolution / 2
 
-            if self.is_straight_line_clear(self.occupancy_grid, curr_x, curr_y, x, y):
+            if self.is_straight_line_clear(self.grid, curr_x, curr_y, x, y):
                 self.chosen_point = Point()
                 self.chosen_point.x = x
                 self.chosen_point.y = y
@@ -399,7 +399,8 @@ class RRT(Node):
                     self.chosen_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0), size=0.5)
                 
                 self.neared_node_id = self.nearest()
-                self.select_move_towards()
+
+                self.update_step()
 
                 time.sleep(0.4)
 
@@ -416,8 +417,10 @@ class RRT(Node):
         Returns:
             nearest_node (int): index of neareset node on the tree
         """
+
         nearest_node = 0
         min_dist = 1000000
+
         for i, point in self.tree.vertices.items():
             if LA.norm([point.x - self.chosen_point.x, point.y - self.chosen_point.y]) < min_dist:
                 nearest_node = i
@@ -425,10 +428,13 @@ class RRT(Node):
         
         return nearest_node
     
-    def select_move_towards(self):
-
+    def update_step(self):
+        
+        # Get the nearest node from chosen node
         nearest_node = self.tree.vertices[self.neared_node_id]
-        self.publish_line_strip(Point(x=nearest_node.x, y=nearest_node.y, z=0.0), self.chosen_point)
+
+        # Publish the line strip from nearest_node to chosen_point
+        self.publish_line_strip([Point(x=nearest_node.x, y=nearest_node.y, z=0.0), self.chosen_point])
 
 
         # from nearest_node to chosen_point, draw a line and go move_percentage of the way
@@ -438,12 +444,14 @@ class RRT(Node):
         new_node.id = len(self.tree.vertices)
 
         new_node.parent = nearest_node.id
+
         self.tree.vertices[new_node.id] = new_node
 
+        # Publish the new node
         self.publish_marker(
             Point(x=new_node.x, y=new_node.y, z=0.0), frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0), size=0.5)
 
-        self.steer(new_node)
+        # self.steer(new_node)
 
         return new_node
 
@@ -487,7 +495,7 @@ class RRT(Node):
         """
         return True
 
-    def is_goal(self, latest_added_node, goal_x, goal_y):
+    def is_goal(self, current_point):
         """
         This method should return whether the latest added node is close enough
         to the goal.
@@ -499,9 +507,12 @@ class RRT(Node):
         Returns:
             close_enough (bool): true if node is close enoughg to the goal
         """
+        dist = LA.norm([current_point.x - self.local_goal[0], current_point.y - self.local_goal[1]])
+        if dist < 0.5:
+            return True
         return False
 
-    def find_path(self, tree, latest_added_node):
+    def find_path(self, current_point):
         """
         This method returns a path as a list of Nodes connecting the starting point to
         the goal once the latest added node is close enough to the goal
@@ -513,8 +524,14 @@ class RRT(Node):
             path ([]): valid path as a list of Nodes
         """
         path = []
-        return path
 
+        while current_point.parent is not None:
+            path.append(current_point)
+            current_point = self.tree.vertices[current_point.parent]
+
+        print(f"Path is {len(path)} long")
+
+        return path
 
 
     # The following methods are needed for RRT* and not RRT
