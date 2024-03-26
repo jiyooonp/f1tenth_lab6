@@ -128,7 +128,6 @@ class RRT(Node):
 
     def pure_pursuit_goal_callback(self, msg):
         self.local_goal = [msg.x, msg.y]
-        print(f"Received new goal: {self.local_goal}")
 
     def clean_grid(self):
 
@@ -233,7 +232,6 @@ class RRT(Node):
         goal_msg.point.y = goal[1]
         goal_msg.point.z = 0.0
 
-
         self.goal_publisher.publish(goal_msg)
 
     def publish_marker_one(self, goal_point, frame='map', color=(1.0, 0.0, 0.0), size=1.0, publisher = 0):
@@ -337,6 +335,23 @@ class RRT(Node):
 
         """
         self.pose_msg = pose_msg
+
+        # clean tree
+        self.clean_grid()
+
+        # while new_node is not in goal_range
+        while True:
+        #   sample_free_space and choose one point
+            self.sample_free_space()
+        #   choose the nearest node 
+        #       nearest_node = nearest(tree, sampled_point)
+        #   go move_percentage of the way from nearest_node to chosen_point, add to tree
+        #  check if new_node is in goal_range
+        #  if yes, find_path
+        #  else, continue
+
+        # Steer for path
+
         self.sample_free_space()
 
     def is_straight_line_clear(self, grid, a1, b1, a2, b2):
@@ -378,6 +393,7 @@ class RRT(Node):
         while True:
 
             random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+            
             x = random_point[0]
             y = random_point[1]
 
