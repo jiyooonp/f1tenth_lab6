@@ -10,27 +10,22 @@ import math
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PoseStamped
-from geometry_msgs.msg import PointStamped
-from geometry_msgs.msg import Pose
-from geometry_msgs.msg import Point
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped, PointStamped, Pose, Point, Quaternion, TransformStamped, Twist
+from nav_msgs.msg import Odometry, OccupancyGrid
+from visualization_msgs.msg import Marker, MarkerArray
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
-from nav_msgs.msg import OccupancyGrid
 
 from occupancy_grid import OccupancyGridPublisher
 
 from tf2_ros import TransformBroadcaster
-from geometry_msgs.msg import Quaternion, TransformStamped, Twist
-from visualization_msgs.msg import Marker, MarkerArray
+
 import time
 
-
-# TODO: import as you need
 
 class MyTree(object):
     def __init__(self):
         self.vertices = {}
+
 
 class MyPoint(object):
     def __init__(self):
@@ -39,6 +34,7 @@ class MyPoint(object):
         self.y = None
         self.parent = None
 
+
 class MyEdge(object):
     def __init__(self):
         self.id = None
@@ -46,17 +42,6 @@ class MyEdge(object):
         self.end = None
 
 
-# class def for tree nodes
-# It's up to you if you want to use this
-class MyNode(object):
-    def __init__(self):
-        self.x = None
-        self.y = None
-        self.parent = None
-        self.cost = None # only used in RRT*
-        self.is_root = False
-
-# class def for RRT
 class RRT(Node):
 
     def __init__(self):
@@ -78,6 +63,12 @@ class RRT(Node):
             scan_topic,
             self.scan_callback,
             1)
+        
+        self.pure_pursuit_goal_sub = self.create_subscription(
+            Point,
+            '/pure_pursuit_goal',
+            self.pure_pursuit_goal_callback,
+            10)
 
         # Publishers
         self.goal_publisher = self.create_publisher(
@@ -117,7 +108,8 @@ class RRT(Node):
         self.grid_size = 30
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8) 
 
-        self.local_goal = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+        # self.local_goal = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+        self.local_goal = [0., 0.]
         
         # Transformation broadcaster for setting the orientation
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -133,6 +125,10 @@ class RRT(Node):
         self.speed = 0.2
         self.steering_angle = 0.0
         self.max_steering_angle = np.pi / 3
+
+    def pure_pursuit_goal_callback(self, msg):
+        self.local_goal = [msg.x, msg.y]
+        print(f"Received new goal: {self.local_goal}")
 
     def clean_grid(self):
 
@@ -379,7 +375,6 @@ class RRT(Node):
         This method should randomly sample the free space, and returns a viable point
 
         """
-
         while True:
 
             random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
@@ -532,44 +527,6 @@ class RRT(Node):
         print(f"Path is {len(path)} long")
 
         return path
-
-
-    # The following methods are needed for RRT* and not RRT
-    def cost(self, tree, node):
-        """
-        This method should return the cost of a node
-
-        Args:
-            node (Node): the current node the cost is calculated for
-        Returns:
-            cost (float): the cost value of the node
-        """
-        return 0
-
-    def line_cost(self, n1, n2):
-        """
-        This method should return the cost of the straight line between n1 and n2
-
-        Args:
-            n1 (Node): node at one end of the straight line
-            n2 (Node): node at the other end of the straint line
-        Returns:
-            cost (float): the cost value of the line
-        """
-        return 0
-
-    def near(self, tree, node):
-        """
-        This method should return the neighborhood of nodes around the given node
-
-        Args:
-            tree ([]): current tree as a list of Nodes
-            node (Node): current node we're finding neighbors for
-        Returns:
-            neighborhood ([]): neighborhood of nodes as a list of Nodes
-        """
-        neighborhood = []
-        return neighborhood
 
 def main(args=None):
     rclpy.init(args=args)

@@ -3,7 +3,6 @@ import rclpy
 from rclpy.node import Node
 
 import numpy as np
-from ackermann_msgs.msg import AckermannDriveStamped
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Point, PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
@@ -92,11 +91,10 @@ class PurePursuit(Node):
         # Publish the waypoints
         self.publish_waypoints()
 
-        self.publish_goal_point(self.goal_point_map,
-                                frame='map', color=(1.0, 0.0, 1.0), size=0.7)
+        # self.publish_goal_point(self.goal_point_map,
+        #                         frame='map', color=(1.0, 0.0, 1.0), size=0.5)
 
     def pose_callback(self, pose_msg):
-
 
         current_position = np.array(
             [pose_msg.pose.pose.position.x, pose_msg.pose.pose.position.y])
@@ -158,7 +156,7 @@ class PurePursuit(Node):
             marker.scale.x = 0.1
             marker.scale.y = 0.1
             marker.scale.z = 0.1
-            marker.color.a = 1.0
+            marker.color.a = 0.1
             marker.color.r = 0.0
             marker.color.g = 1.0
             marker.color.b = 0.0
