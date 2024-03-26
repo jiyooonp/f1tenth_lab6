@@ -22,9 +22,29 @@ from occupancy_grid import OccupancyGridPublisher
 
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import Quaternion, TransformStamped, Twist
+from visualization_msgs.msg import Marker, MarkerArray
+import time
 
 
 # TODO: import as you need
+
+class MyTree(object):
+    def __init__(self):
+        self.vertices = {}
+
+class MyPoint(object):
+    def __init__(self):
+        self.id = None
+        self.x = None
+        self.y = None
+        self.parent = None
+
+class MyEdge(object):
+    def __init__(self):
+        self.id = None
+        self.start = None
+        self.end = None
+
 
 # class def for tree nodes
 # It's up to you if you want to use this
@@ -64,19 +84,69 @@ class RRT(Node):
 
         # publishers
         # TODO: create a drive message publisher, and other publishers that you might need
+        self.goal_publisher = self.create_publisher(
+            PointStamped, '/local_goal', 10)
+        
+        self.random_point_pub = self.create_publisher(
+            Marker,
+            '/random_point',
+            10)
+        self.next_point_pub = self.create_publisher(
+            Marker,
+            '/next_point',
+            10)
+        self.target_line_pub = self.create_publisher(
+            Marker,
+            '/target_line',
+            10)
+        self.marker_array_pub = self.create_publisher(
+            MarkerArray,
+            '/marker_array',
+            10)
+        self.drive_pub = self.create_publisher(
+            AckermannDriveStamped,
+            '/drive',
+            10)
+        self.marker_history = []
+        
 
         # class attributes
         # TODO: maybe create your occupancy grid here
         self.publisher_ = self.create_publisher(
             OccupancyGrid, '/occupancy_grid', 10)
         self.grid_resolution = 0.1  # meters per cell
-        self.grid_size = 150
+        self.grid_size = 30
         self.grid = np.zeros((self.grid_size, self.grid_size),
                              dtype=np.int8)  # Occupancy grid data
         self.angular = Twist().angular
 
+        self.occupancy_grid = np.zeros((self.grid_size, self.grid_size),
+                                        dtype=np.int8)  # Occupancy grid data
+        
+        self.local_goal = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+        
         # Transformation broadcaster for setting the orientation
         self.tf_broadcaster = TransformBroadcaster(self)
+
+        # RRT variables
+        self.tree = MyTree()
+        initial_point = MyPoint()
+        initial_point.x = self.grid_size * self.grid_resolution / 2
+        initial_point.y = self.grid_size * self.grid_resolution / 2
+        initial_point.id = 0
+        initial_point.parent = None
+        self.tree.vertices[0] = initial_point
+
+
+        self.move_percentage = 0.2
+
+        # Driving 
+        self.L = 1.0
+        self.speed = 0.2
+        self.steering_angle = 0.0
+        self.max_steering_angle = np.pi / 3
+
+
 
     def scan_callback(self, msg):
         """
@@ -106,6 +176,10 @@ class RRT(Node):
 
         # Publish occupancy grid
         self.publish_grid()
+        
+        # publish the local goal
+        self.publish_goal(self.local_goal)
+
 
     def publish_grid(self):
         occupancy_grid_msg = OccupancyGrid()
@@ -135,6 +209,9 @@ class RRT(Node):
         # Rotate the grid data based on the car's orientation
         rotated_grid = np.rot90(self.grid, k=1)  # Rotate 180 degrees
 
+        # Update the occupancy grid with the rotated grid
+        self.occupancy_grid = rotated_grid
+
         occupancy_grid_msg.data = np.ravel(rotated_grid).tolist()
 
         self.publisher_.publish(occupancy_grid_msg)
@@ -147,6 +224,91 @@ class RRT(Node):
         transform.transform.rotation = q
         self.tf_broadcaster.sendTransform(transform)
 
+    def publish_goal(self, goal, color=[0, 0, 1]):
+        """
+        Publishes the goal as a PointStamped message
+
+        Args:
+            goal (tuple): the goal as a tuple (x, y)
+        Returns:
+        """
+        goal_msg = PointStamped()
+        goal_msg.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.header.frame_id = 'ego_racecar/base_link'
+        goal_msg.point.x = goal[0]
+        goal_msg.point.y = goal[1]
+        goal_msg.point.z = 0.0
+
+
+        self.goal_publisher.publish(goal_msg)
+
+    def publish_marker_one(self, goal_point, frame='map', color=(1.0, 0.0, 0.0), size=1.0, publisher = 0):
+        # Publish a marker for the goal point
+        marker = Marker()
+        marker.header.frame_id = frame
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.ns = 'random_point'
+        marker.pose.position.x = goal_point.x
+        marker.pose.position.y = goal_point.y
+        marker.pose.position.z = goal_point.z
+        marker.scale.x = 0.2 * size
+        marker.scale.y = 0.2 * size
+        marker.scale.z = 0.2 * size
+        marker.color.a = 0.8
+        marker.color.r = color[0]
+        marker.color.g = color[1]
+        marker.color.b = color[2]
+        if publisher == 0:
+            self.random_point_pub.publish(marker)
+        elif publisher == 1:
+            self.next_point_pub.publish(marker)
+
+    def publish_marker(self, goal_point, frame='map', color=(1.0, 0.0, 0.0), size=1.0):
+        # Create a new marker
+        marker = Marker()
+        marker.header.frame_id = frame
+        marker.id = len(self.marker_history)  # Unique ID based on history size
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.ns = 'random_point'
+        marker.pose.position.x = goal_point.x
+        marker.pose.position.y = goal_point.y
+        marker.pose.position.z = goal_point.z
+        marker.scale.x = 0.2 * size
+        marker.scale.y = 0.2 * size
+        marker.scale.z = 0.2 * size
+        marker.color.a = 0.8
+        marker.color.r = color[0]
+        marker.color.g = color[1]
+        marker.color.b = color[2]
+
+        # Add the marker to the history
+        self.marker_history.append(marker)
+
+        # Publish the entire history
+        marker_array = MarkerArray(markers=self.marker_history)
+        self.marker_array_pub.publish(marker_array)
+
+    def publish_line_strip(self, point1, point2):
+        marker = Marker()
+        marker.header.frame_id = 'ego_racecar/base_link'  # Change to your desired frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = 'line_strip'
+        marker.id = 0
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.1  # Line width
+        marker.color.r = 1.0  # Red color
+        marker.color.a = 1.0  # Fully opaque
+
+        # Define the line strip points
+        marker.points.append(point1)
+        marker.points.append(point2)
+
+        self.target_line_pub.publish(marker)
     def euler_to_quaternion(self, roll, pitch, yaw):
         cy = math.cos(yaw * 0.5)
         sy = math.sin(yaw * 0.5)
@@ -178,23 +340,73 @@ class RRT(Node):
         Returns:
 
         """
+        self.pose_msg = pose_msg
+        self.sample()
 
         return None
+    def is_straight_line_clear(self, grid, a1, b1, a2, b2):
+        # Convert coordinates to integers
+        a1 = int(a1)
+        b1 = int(b1)
+        a2 = int(a2)
+        b2 = int(b2)
+        # Bresenham's line algorithm
+        dx = abs(a2 - a1)
+        dy = abs(b2 - b1)
+        if dx > dy:
+            p_inc = 2 * dy - dx
+            y = b1
+            for x in range(a1, a2 + 1 if a2 > a1 else a2 - 1, 1 if a2 > a1 else -1):
+                if grid[x, y] == 100:
+                    return False
+                if p_inc >= 0:
+                    y += 1 if b2 > b1 else -1
+                    p_inc -= 2 * dx
+                p_inc += 2 * dy
+        else:
+            p_inc = 2 * dx - dy
+            x = a1
+            for y in range(b1, b2 + 1 if b2 > b1 else b2 - 1, 1 if b2 > b1 else -1):
+                if grid[x, y] == 100:
+                    return False
+                if p_inc >= 0:
+                    x += 1 if a2 > a1 else -1
+                    p_inc -= 2 * dy
+                p_inc += 2 * dx
+        return True
 
     def sample(self):
         """
         This method should randomly sample the free space, and returns a viable point
 
-        Args:
-        Returns:
-            (x, y) (float float): a tuple representing the sampled point
-
         """
-        x = None
-        y = None
-        return (x, y)
+        while True:
 
-    def nearest(self, tree, sampled_point):
+            random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+            x = random_point[0]
+            y = random_point[1]
+
+            curr_x = self.grid_size * self.grid_resolution / 2
+            curr_y = self.grid_size * self.grid_resolution / 2
+
+            if self.is_straight_line_clear(self.occupancy_grid, curr_x, curr_y, x, y):
+                self.chosen_point = Point()
+                self.chosen_point.x = x
+                self.chosen_point.y = y
+                self.chosen_point.z = 0.0
+
+                self.publish_marker(
+                    self.chosen_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0), size=0.5)
+                
+                self.neared_node_id = self.nearest()
+                self.select_move_towards()
+
+                time.sleep(0.4)
+
+                break
+
+
+    def nearest(self):
         """
         This method should return the nearest node on the tree to the sampled point
 
@@ -205,9 +417,37 @@ class RRT(Node):
             nearest_node (int): index of neareset node on the tree
         """
         nearest_node = 0
+        min_dist = 1000000
+        for i, point in self.tree.vertices.items():
+            if LA.norm([point.x - self.chosen_point.x, point.y - self.chosen_point.y]) < min_dist:
+                nearest_node = i
+                min_dist = LA.norm([point.x - self.chosen_point.x, point.y - self.chosen_point.y])
+        
         return nearest_node
+    
+    def select_move_towards(self):
 
-    def steer(self, nearest_node, sampled_point):
+        nearest_node = self.tree.vertices[self.neared_node_id]
+        self.publish_line_strip(Point(x=nearest_node.x, y=nearest_node.y, z=0.0), self.chosen_point)
+
+
+        # from nearest_node to chosen_point, draw a line and go move_percentage of the way
+        new_node = MyPoint()
+        new_node.x = nearest_node.x + self.move_percentage * (self.chosen_point.x - nearest_node.x)
+        new_node.y = nearest_node.y + self.move_percentage * (self.chosen_point.y - nearest_node.y)
+        new_node.id = len(self.tree.vertices)
+
+        new_node.parent = nearest_node.id
+        self.tree.vertices[new_node.id] = new_node
+
+        self.publish_marker(
+            Point(x=new_node.x, y=new_node.y, z=0.0), frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0), size=0.5)
+
+        self.steer(new_node)
+
+        return new_node
+
+    def steer(self, new_node: MyPoint):
         """
         This method should return a point in the viable set such that it is closer 
         to the nearest_node than sampled_point is.
@@ -218,8 +458,20 @@ class RRT(Node):
         Returns:
             new_node (Node): new node created from steering
         """
-        new_node = None
-        return new_node
+
+        # Calculate curvature/steering angle
+        curvature = 2 * new_node.y / self.L ** 2
+        curvature = curvature * 0.4
+        steering_angle = max(-self.max_steering_angle,
+                             min(self.max_steering_angle, curvature))
+
+        # Publish the drive message
+        drive_msg = AckermannDriveStamped()
+        drive_msg.header.stamp = self.pose_msg.header.stamp
+        drive_msg.header.frame_id = self.pose_msg.header.frame_id
+        drive_msg.drive.steering_angle = steering_angle
+        drive_msg.drive.speed = self.speed
+        self.drive_pub.publish(drive_msg)
 
     def check_collision(self, nearest_node, new_node):
         """
