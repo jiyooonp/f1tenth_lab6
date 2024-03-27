@@ -10,7 +10,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PoseStamped, PointStamped, Pose, Point, Quaternion, TransformStamped, Twist
+from geometry_msgs.msg import PointStamped, Pose, Point, Quaternion, TransformStamped, Twist
 from nav_msgs.msg import Odometry, OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
@@ -69,9 +69,6 @@ class RRT(Node):
             10)
 
         # Publishers
-        self.goal_publisher = self.create_publisher(
-            PointStamped, '/local_goal', 10)
-        
         self.drive_pub = self.create_publisher(
             AckermannDriveStamped,
             '/drive',
@@ -82,13 +79,9 @@ class RRT(Node):
             OccupancyGrid, 
             '/occupancy_grid', 
             10)
-        self.random_point_pub = self.create_publisher(
+        self.target_point_pub = self.create_publisher(
             Marker,
-            '/random_point',
-            10)
-        self.next_point_pub = self.create_publisher(
-            Marker,
-            '/next_point',
+            '/target_point',
             10)
         self.target_line_pub = self.create_publisher(
             Marker,
@@ -114,7 +107,8 @@ class RRT(Node):
         self.angular = Twist().angular
 
         # RRT variables
-        self.move_percentage = 0.3
+        self.move_percentage = 0.4
+        self.goal_dist_threshold = 0.3
 
         self.clean_grid()
 
@@ -125,7 +119,13 @@ class RRT(Node):
         self.max_steering_angle = np.pi / 3
 
     def pure_pursuit_goal_callback(self, msg):
+
         self.local_goal = [msg.x, msg.y]
+
+        # publish visualization 
+        self.publish_one_marker(Point(x=msg.x, y=msg.y, z   
+        =0.0), frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.5)
+
         print(f"New goal: {self.local_goal}")
 
     def clean_grid(self):
@@ -136,9 +136,13 @@ class RRT(Node):
         initial_point = MyPoint()
         initial_point.x = 0.0 #self.grid_size * self.grid_resolution / 2
         initial_point.y = 0.0 #self.grid_size * self.grid_resolution / 2
+        initial_point.z = 0.0
         initial_point.id = 0
         initial_point.parent = None
         self.tree.vertices[0] = initial_point
+
+        self.publish_marker_history(
+            initial_point, frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0, 0.5), size=0.1)
 
     def scan_callback(self, msg):
         """
@@ -170,7 +174,7 @@ class RRT(Node):
         self.publish_grid()
         
         # publish the local goal
-        self.publish_goal(self.local_goal)
+        self.publish_one_marker(Point(x=self.local_goal[0], y=self.local_goal[1], z=0.0))
 
     def publish_grid(self):
 
@@ -216,24 +220,8 @@ class RRT(Node):
         transform.transform.rotation = q
         self.tf_broadcaster.sendTransform(transform)
 
-    def publish_goal(self, goal, color=[0, 0, 1]):
-        """
-        Publishes the goal as a PointStamped message
+    def publish_one_marker(self, goal_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.5):
 
-        Args:
-            goal (tuple): the goal as a tuple (x, y)
-        Returns:
-        """
-        goal_msg = PointStamped()
-        goal_msg.header.stamp = self.get_clock().now().to_msg()
-        goal_msg.header.frame_id = 'ego_racecar/base_link'
-        goal_msg.point.x = goal[0]
-        goal_msg.point.y = goal[1]
-        goal_msg.point.z = 0.0
-
-        self.goal_publisher.publish(goal_msg)
-
-    def publish_marker_one(self, goal_point, frame='map', color=(1.0, 0.0, 0.0), size=1.0, publisher = 0):
         # Publish a marker for the goal point
         marker = Marker()
         marker.header.frame_id = frame
@@ -244,19 +232,18 @@ class RRT(Node):
         marker.pose.position.x = goal_point.x
         marker.pose.position.y = goal_point.y
         marker.pose.position.z = goal_point.z
-        marker.scale.x = 0.2 * size
-        marker.scale.y = 0.2 * size
-        marker.scale.z = 0.2 * size
-        marker.color.a = 0.8
+        marker.scale.x = size
+        marker.scale.y = size
+        marker.scale.z = size
+        marker.color.a = color[3]
         marker.color.r = color[0]
         marker.color.g = color[1]
         marker.color.b = color[2]
-        if publisher == 0:
-            self.random_point_pub.publish(marker)
-        elif publisher == 1:
-            self.next_point_pub.publish(marker)
 
-    def publish_marker(self, goal_point, frame='map', color=(1.0, 0.0, 0.0), size=1.0):
+        self.target_point_pub.publish(marker)
+
+    def publish_marker_history(self, goal_point, frame='map', color=(1.0, 0.0, 0.0, 0.3), size=0.1):
+
         # Create a new marker
         marker = Marker()
         marker.header.frame_id = frame
@@ -267,10 +254,10 @@ class RRT(Node):
         marker.pose.position.x = goal_point.x
         marker.pose.position.y = goal_point.y
         marker.pose.position.z = goal_point.z
-        marker.scale.x = 0.2 * size
-        marker.scale.y = 0.2 * size
-        marker.scale.z = 0.2 * size
-        marker.color.a = 0.8
+        marker.scale.x = size
+        marker.scale.y = size
+        marker.scale.z = size
+        marker.color.a = color[3]
         marker.color.r = color[0]
         marker.color.g = color[1]
         marker.color.b = color[2]
@@ -280,6 +267,7 @@ class RRT(Node):
 
         # Publish the entire history
         marker_array = MarkerArray(markers=self.marker_history)
+
         self.marker_array_pub.publish(marker_array)
 
     def publish_line_strip(self, points):
@@ -337,11 +325,10 @@ class RRT(Node):
 
         # clean tree
         self.clean_grid()
+        self.marker_history = []
 
         # while new_node is not in goal_range
         while True:
-            self.publish_goal(self.local_goal)
-            
         #   sample_free_space and choose one point
             self.sample_free_space() # this will set self.chosen_point
         #   choose the nearest node 
@@ -402,18 +389,14 @@ class RRT(Node):
         This method should randomly sample the free space, and returns a viable point
         """
         random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
-        # random_point = np.random.rand(
-        #     2) * self.grid_size * self.grid_resolution * 5 - self.grid_size * self.grid_resolution * 5 / 2
-        # random_point = np.clip(
-        #     random_point, -self.grid_size*self.grid_resolution/2, self.grid_size*self.grid_resolution/2)
 
         self.chosen_point = Point()
         self.chosen_point.x = random_point[0]
         self.chosen_point.y = random_point[1]
         self.chosen_point.z = 0.0
 
-        self.publish_marker(
-            self.chosen_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0), size=0.5)
+        self.publish_marker_history(
+            self.chosen_point, frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0, 0.5), size=0.1)
         
     def get_nearest_node(self):
         """
@@ -447,12 +430,6 @@ class RRT(Node):
             new_node.parent = nearest_node.id
 
         self.tree.vertices[new_node.id] = new_node
-
-        # Publish the new node
-        # self.publish_marker(
-        #     Point(x=new_node.x, y=new_node.y, z=0.0), frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0), size=0.5)
-
-        # self.steer(new_node)
 
         return new_node
 
@@ -500,16 +477,9 @@ class RRT(Node):
         """
         This method should return whether the latest added node is close enough
         to the goal.
-
-        Args:
-            latest_added_node (Node): latest added node on the tree
-            goal_x (double): x coordinate of the current goal
-            goal_y (double): y coordinate of the current goal
-        Returns:
-            close_enough (bool): true if node is close enoughg to the goal
         """
         dist = LA.norm([current_point.x - self.local_goal[0], current_point.y - self.local_goal[1]])
-        if dist < 0.2:
+        if dist < self.goal_dist_threshold:
             return True
         return False
 
@@ -517,21 +487,15 @@ class RRT(Node):
         """
         This method returns a path as a list of Nodes connecting the starting point to
         the goal once the latest added node is close enough to the goal
-
-        Args:
-            tree ([]): current tree as a list of Nodes
-            latest_added_node (Node): latest added node in the tree
-        Returns:
-            path ([]): valid path as a list of Nodes
         """
+
         path = []
 
         while current_point.parent is not None:
             path.append(Point(x=current_point.x, y=current_point.y, z=0.0))
-            print(current_point.id, end=", ")
             current_point = self.tree.vertices[current_point.parent]
 
-        print(f" Path is {len(path)} long")
+        # print(f" Path is {len(path)} long")
 
         return path
 
