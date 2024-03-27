@@ -91,8 +91,8 @@ class PurePursuit(Node):
         # Publish the waypoints
         self.publish_waypoints()
 
-        # self.publish_goal_point(self.goal_point_map,
-        #                         frame='map', color=(1.0, 0.0, 1.0), size=0.5)
+        self.publish_goal_point(self.goal_point_map,
+                                frame='map', color=(0.0, 1.0, 1.0), size=0.5)
 
     def pose_callback(self, pose_msg):
 

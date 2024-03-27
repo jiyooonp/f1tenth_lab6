@@ -105,11 +105,11 @@ class RRT(Node):
 
         # Occupancy grid variables
         self.grid_resolution = 0.1  # meters per cell
-        self.grid_size = 30
+        self.grid_size = 60
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8) 
 
         # self.local_goal = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
-        self.local_goal = [0., 0.]
+        self.local_goal = [2., 0.]
         
         # Transformation broadcaster for setting the orientation
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -128,6 +128,7 @@ class RRT(Node):
 
     def pure_pursuit_goal_callback(self, msg):
         self.local_goal = [msg.x, msg.y]
+        print(f"New goal: {self.local_goal}")
 
     def clean_grid(self):
 
@@ -135,8 +136,8 @@ class RRT(Node):
 
         # Initialize the tree with the initial point
         initial_point = MyPoint()
-        initial_point.x = self.grid_size * self.grid_resolution / 2
-        initial_point.y = self.grid_size * self.grid_resolution / 2
+        initial_point.x = 0.0 #self.grid_size * self.grid_resolution / 2
+        initial_point.y = 0.0 #self.grid_size * self.grid_resolution / 2
         initial_point.id = 0
         initial_point.parent = None
         self.tree.vertices[0] = initial_point
@@ -341,18 +342,31 @@ class RRT(Node):
 
         # while new_node is not in goal_range
         while True:
+            self.publish_goal(self.local_goal)
+            
         #   sample_free_space and choose one point
-            self.sample_free_space()
+            self.sample_free_space() # this will set self.chosen_point
         #   choose the nearest node 
         #       nearest_node = nearest(tree, sampled_point)
+            self.get_nearest_node() # this will set self.nearest_node_id
+
         #   go move_percentage of the way from nearest_node to chosen_point, add to tree
+            new_node = self.update_step() # this adds to the tree
+        
+        # for my own visualization
+            path = self.find_path(new_node)
+            self.publish_line_strip(path)
+
         #  check if new_node is in goal_range
-        #  if yes, find_path
-        #  else, continue
+            if self.is_goal(new_node):
+                #  if yes, find_path
+                time.sleep(3)
+                self.marker_history = []
+                break
+        # visualize the path
+
 
         # Steer for path
-
-        self.sample_free_space()
 
     def is_straight_line_clear(self, grid, a1, b1, a2, b2):
         # Convert coordinates to integers
@@ -388,64 +402,41 @@ class RRT(Node):
     def sample_free_space(self):
         """
         This method should randomly sample the free space, and returns a viable point
-
         """
-        while True:
+        random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+        # random_point = np.random.rand(
+        #     2) * self.grid_size * self.grid_resolution * 5 - self.grid_size * self.grid_resolution * 5 / 2
+        # random_point = np.clip(
+        #     random_point, -self.grid_size*self.grid_resolution/2, self.grid_size*self.grid_resolution/2)
 
-            random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
-            
-            x = random_point[0]
-            y = random_point[1]
+        self.chosen_point = Point()
+        self.chosen_point.x = random_point[0]
+        self.chosen_point.y = random_point[1]
+        self.chosen_point.z = 0.0
 
-            curr_x = self.grid_size * self.grid_resolution / 2
-            curr_y = self.grid_size * self.grid_resolution / 2
-
-            if self.is_straight_line_clear(self.grid, curr_x, curr_y, x, y):
-                self.chosen_point = Point()
-                self.chosen_point.x = x
-                self.chosen_point.y = y
-                self.chosen_point.z = 0.0
-
-                self.publish_marker(
-                    self.chosen_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0), size=0.5)
-                
-                self.neared_node_id = self.nearest()
-
-                self.update_step()
-
-                time.sleep(0.4)
-
-                break
-
-
-    def nearest(self):
+        self.publish_marker(
+            self.chosen_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0), size=0.5)
+        
+    def get_nearest_node(self):
         """
         This method should return the nearest node on the tree to the sampled point
-
-        Args:
-            tree ([]): the current RRT tree
-            sampled_point (tuple of (float, float)): point sampled in free space
-        Returns:
-            nearest_node (int): index of neareset node on the tree
         """
 
-        nearest_node = 0
+        self.nearest_node_id = 0
         min_dist = 1000000
 
         for i, point in self.tree.vertices.items():
             if LA.norm([point.x - self.chosen_point.x, point.y - self.chosen_point.y]) < min_dist:
-                nearest_node = i
+                self.nearest_node_id = i
                 min_dist = LA.norm([point.x - self.chosen_point.x, point.y - self.chosen_point.y])
         
-        return nearest_node
-    
     def update_step(self):
         
         # Get the nearest node from chosen node
-        nearest_node = self.tree.vertices[self.neared_node_id]
+        nearest_node = self.tree.vertices[self.nearest_node_id]
 
         # Publish the line strip from nearest_node to chosen_point
-        self.publish_line_strip([Point(x=nearest_node.x, y=nearest_node.y, z=0.0), self.chosen_point])
+        # self.publish_line_strip([Point(x=nearest_node.x, y=nearest_node.y, z=0.0), self.chosen_point])
 
 
         # from nearest_node to chosen_point, draw a line and go move_percentage of the way
@@ -459,8 +450,8 @@ class RRT(Node):
         self.tree.vertices[new_node.id] = new_node
 
         # Publish the new node
-        self.publish_marker(
-            Point(x=new_node.x, y=new_node.y, z=0.0), frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0), size=0.5)
+        # self.publish_marker(
+        #     Point(x=new_node.x, y=new_node.y, z=0.0), frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0), size=0.5)
 
         # self.steer(new_node)
 
@@ -519,7 +510,7 @@ class RRT(Node):
             close_enough (bool): true if node is close enoughg to the goal
         """
         dist = LA.norm([current_point.x - self.local_goal[0], current_point.y - self.local_goal[1]])
-        if dist < 0.5:
+        if dist < 0.2:
             return True
         return False
 
@@ -537,10 +528,11 @@ class RRT(Node):
         path = []
 
         while current_point.parent is not None:
-            path.append(current_point)
+            path.append(Point(x=current_point.x, y=current_point.y, z=0.0))
+            print(current_point.id, end=", ")
             current_point = self.tree.vertices[current_point.parent]
 
-        print(f"Path is {len(path)} long")
+        print(f" Path is {len(path)} long")
 
         return path
 
