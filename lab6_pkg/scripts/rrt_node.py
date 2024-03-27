@@ -33,13 +33,6 @@ class MyPoint(object):
         self.parent = None
 
 
-class MyEdge(object):
-    def __init__(self):
-        self.id = None
-        self.start = None
-        self.end = None
-
-
 class RRT(Node):
 
     def __init__(self):
@@ -96,10 +89,9 @@ class RRT(Node):
 
         # Occupancy grid variables
         self.grid_resolution = 0.1  # meters per cell
-        self.grid_size = 60
+        self.grid_size = 50
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8) 
 
-        # self.local_goal = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
         self.local_goal = [2., 0.]
         
         # Transformation broadcaster for setting the orientation
@@ -108,7 +100,7 @@ class RRT(Node):
 
         # RRT variables
         self.move_percentage = 0.4
-        self.goal_dist_threshold = 0.3
+        self.goal_dist_threshold = 0.2
 
         self.clean_grid()
 
@@ -126,7 +118,7 @@ class RRT(Node):
         self.publish_one_marker(Point(x=msg.x, y=msg.y, z   
         =0.0), frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.5)
 
-        print(f"New goal: {self.local_goal}")
+        # print(f"New goal: {self.local_goal}")
 
     def clean_grid(self):
 
@@ -145,14 +137,6 @@ class RRT(Node):
             initial_point, frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0, 0.5), size=0.1)
 
     def scan_callback(self, msg):
-        """
-        LaserScan callback, you should update your occupancy grid here
-
-        Args: 
-            scan_msg (LaserScan): incoming message from subscribed topic
-        Returns:
-
-        """
         angles = np.arange(msg.angle_min, msg.angle_max, msg.angle_increment)
         ranges = np.array(msg.ranges)
 
@@ -324,8 +308,9 @@ class RRT(Node):
         self.pose_msg = pose_msg
 
         # clean tree
-        self.clean_grid()
         self.marker_history = []
+        self.clean_grid()
+
 
         # while new_node is not in goal_range
         while True:
@@ -423,9 +408,25 @@ class RRT(Node):
         new_node.id = len(self.tree.vertices)
 
         # check if parent should be nearest_node or it's parent 
-        if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
+        # if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
 
-            new_node.parent = nearest_node.parent
+        #     new_node.parent = nearest_node.parent
+        # else:
+        #     new_node.parent = nearest_node.id
+        prev = new_node
+        dist = 0
+        if nearest_node.parent:
+            curr_point = self.tree.vertices[nearest_node.parent]
+
+            while curr_point.parent is not None:
+                print(f"Current point is {curr_point.id}")
+                dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
+                new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
+                if dist >= new_dist:
+                    dist = new_dist
+                    new_node.parent = curr_point.id
+                prev = curr_point
+                curr_point = self.tree.vertices[curr_point.parent]
         else:
             new_node.parent = nearest_node.id
 
@@ -494,7 +495,7 @@ class RRT(Node):
         while current_point.parent is not None:
             path.append(Point(x=current_point.x, y=current_point.y, z=0.0))
             current_point = self.tree.vertices[current_point.parent]
-
+        path.append(Point(x = 0.0, y = 0.0, z = 0.0))
         # print(f" Path is {len(path)} long")
 
         return path
