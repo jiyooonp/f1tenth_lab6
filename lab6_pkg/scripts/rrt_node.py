@@ -15,8 +15,6 @@ from nav_msgs.msg import Odometry, OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 
-from occupancy_grid import OccupancyGridPublisher
-
 from tf2_ros import TransformBroadcaster
 
 import time
@@ -116,7 +114,7 @@ class RRT(Node):
         self.angular = Twist().angular
 
         # RRT variables
-        self.move_percentage = 0.2
+        self.move_percentage = 0.3
 
         self.clean_grid()
 
@@ -435,17 +433,18 @@ class RRT(Node):
         # Get the nearest node from chosen node
         nearest_node = self.tree.vertices[self.nearest_node_id]
 
-        # Publish the line strip from nearest_node to chosen_point
-        # self.publish_line_strip([Point(x=nearest_node.x, y=nearest_node.y, z=0.0), self.chosen_point])
-
-
         # from nearest_node to chosen_point, draw a line and go move_percentage of the way
         new_node = MyPoint()
         new_node.x = nearest_node.x + self.move_percentage * (self.chosen_point.x - nearest_node.x)
         new_node.y = nearest_node.y + self.move_percentage * (self.chosen_point.y - nearest_node.y)
         new_node.id = len(self.tree.vertices)
 
-        new_node.parent = nearest_node.id
+        # check if parent should be nearest_node or it's parent 
+        if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
+
+            new_node.parent = nearest_node.parent
+        else:
+            new_node.parent = nearest_node.id
 
         self.tree.vertices[new_node.id] = new_node
 
