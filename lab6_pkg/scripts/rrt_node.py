@@ -10,12 +10,17 @@ import math
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PointStamped, Pose, Point, Quaternion, TransformStamped, Twist
+from geometry_msgs.msg import PointStamped, Pose, Point, Quaternion, TransformStamped, Twist, Vector3
 from nav_msgs.msg import Odometry, OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import ColorRGBA
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 
 from tf2_ros import TransformBroadcaster
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+from tf2_geometry_msgs import do_transform_point
 
 import time
 
@@ -38,20 +43,16 @@ class RRT(Node):
     def __init__(self):
         super().__init__('rrt_node')
 
-        # topics, not saved as attributes
-        pose_topic = "ego_racecar/odom"
-        scan_topic = "/scan"
-
         # Subscribers
         self.pose_sub_ = self.create_subscription(
             Odometry,
-            pose_topic,
+            "ego_racecar/odom",
             self.pose_callback,
             1)
 
         self.scan_sub_ = self.create_subscription(
             LaserScan,
-            scan_topic,
+            "/scan",
             self.scan_callback,
             1)
         
@@ -68,7 +69,7 @@ class RRT(Node):
             10)
     
         # Visualization
-        self.publisher_ = self.create_publisher(
+        self.occupancy_pub = self.create_publisher(
             OccupancyGrid, 
             '/occupancy_grid', 
             10)
@@ -80,12 +81,16 @@ class RRT(Node):
             Marker,
             '/target_line',
             10)
+        self.target_waypoint_pub = self.create_publisher(
+            Marker,
+            '/target_waypoint',
+            10)
         self.marker_array_pub = self.create_publisher(
             MarkerArray,
             '/marker_array',
             10)
         
-        self.marker_history = []
+        self.randomly_sampled_history = []
 
         # Occupancy grid variables
         self.grid_resolution = 0.1  # meters per cell
@@ -95,7 +100,7 @@ class RRT(Node):
         self.local_goal = [2., 0.]
         
         # Transformation broadcaster for setting the orientation
-        self.tf_broadcaster = TransformBroadcaster(self)
+        # self.tf_broadcaster = TransformBroadcaster(self)
         self.angular = Twist().angular
 
         # RRT variables
@@ -105,18 +110,37 @@ class RRT(Node):
         self.clean_grid()
 
         # Driving variables
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        self.frame_base_link = 'ego_racecar/base_link'
+        self.frame_map = 'map'
+
+
         self.L = 1.0
         self.speed = 0.2
         self.steering_angle = 0.0
         self.max_steering_angle = np.pi / 3
 
+        self.x_coords = np.array([])
+        self.y_coords = np.array([])
+
+        # load all the waypoints from the csv file
+        self.waypoints = np.genfromtxt(
+            '/sim_ws/src/f1tenth_lab5/logs/waypoints_clicked.csv', delimiter=',')[:, :2]
+
+        # only take every 50th waypoint
+        self.waypoints = self.waypoints[::100]
+
+        
     def pure_pursuit_goal_callback(self, msg):
 
         self.local_goal = [msg.x, msg.y]
 
         # publish visualization 
-        self.publish_one_marker(Point(x=msg.x, y=msg.y, z   
-        =0.0), frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.5)
+        # self.publish_point_marker(Point(x=msg.x, y=msg.y, z   
+        # =0.0), frame='ego_racecar/base_link', color=(1.0, 0.2, 0.2, 1.0), size=0.3)
 
         # print(f"New goal: {self.local_goal}")
 
@@ -137,17 +161,19 @@ class RRT(Node):
             initial_point, frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0, 0.5), size=0.1)
 
     def scan_callback(self, msg):
+
         angles = np.arange(msg.angle_min, msg.angle_max, msg.angle_increment)
         ranges = np.array(msg.ranges)
 
         # Convert ranges to x, y coordinates
-        x_coords = ranges * np.cos(angles)
-        y_coords = ranges * -np.sin(angles)
+        self.x_coords = ranges * np.cos(angles)
+        self.y_coords = ranges * -np.sin(angles)
+
 
         # Convert coordinates to grid indices
-        grid_x = np.clip(np.floor((x_coords / self.grid_resolution) +
+        grid_x = np.clip(np.floor((self.x_coords / self.grid_resolution) +
                          (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
-        grid_y = np.clip(np.floor((y_coords / self.grid_resolution) +
+        grid_y = np.clip(np.floor((self.y_coords / self.grid_resolution) +
                          (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
 
         # Update occupancy grid
@@ -158,13 +184,13 @@ class RRT(Node):
         self.publish_grid()
         
         # publish the local goal
-        self.publish_one_marker(Point(x=self.local_goal[0], y=self.local_goal[1], z=0.0))
+        self.publish_point_marker(Point(x=self.local_goal[0], y=self.local_goal[1], z=0.0))
 
     def publish_grid(self):
 
         occupancy_grid_msg = OccupancyGrid()
         occupancy_grid_msg.header.stamp = self.get_clock().now().to_msg()
-        occupancy_grid_msg.header.frame_id = 'ego_racecar/base_link'
+        occupancy_grid_msg.header.frame_id = self.frame_base_link
         occupancy_grid_msg.info.map_load_time = self.get_clock().now().to_msg()
         occupancy_grid_msg.info.resolution = self.grid_resolution
         occupancy_grid_msg.info.width = self.grid_size
@@ -194,17 +220,17 @@ class RRT(Node):
 
         occupancy_grid_msg.data = np.ravel(rotated_grid).tolist()
 
-        self.publisher_.publish(occupancy_grid_msg)
+        self.occupancy_pub.publish(occupancy_grid_msg)
 
-        # Broadcast the transform with the corrected orientation
-        transform = TransformStamped()
-        transform.header.stamp = self.get_clock().now().to_msg()
-        transform.header.frame_id = 'ego_racecar/base_link'
-        transform.child_frame_id = 'ego_racecar/base_link'
-        transform.transform.rotation = q
-        self.tf_broadcaster.sendTransform(transform)
+        # # Broadcast the transform with the corrected orientation
+        # transform = TransformStamped()
+        # transform.header.stamp = self.get_clock().now().to_msg()
+        # transform.header.frame_id = 'ego_racecar/base_link'
+        # transform.child_frame_id = 'ego_racecar/base_link'
+        # transform.transform.rotation = q
+        # self.tf_broadcaster.sendTransform(transform)
 
-    def publish_one_marker(self, goal_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.5):
+    def publish_point_marker(self, goal_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.3):
 
         # Publish a marker for the goal point
         marker = Marker()
@@ -216,13 +242,8 @@ class RRT(Node):
         marker.pose.position.x = goal_point.x
         marker.pose.position.y = goal_point.y
         marker.pose.position.z = goal_point.z
-        marker.scale.x = size
-        marker.scale.y = size
-        marker.scale.z = size
-        marker.color.a = color[3]
-        marker.color.r = color[0]
-        marker.color.g = color[1]
-        marker.color.b = color[2]
+        marker.scale = Vector3(x=size, y=size, z=size)
+        marker.color = ColorRGBA(r=color[0], g=color[1], b=color[2], a=color[3])
 
         self.target_point_pub.publish(marker)
 
@@ -231,48 +252,59 @@ class RRT(Node):
         # Create a new marker
         marker = Marker()
         marker.header.frame_id = frame
-        marker.id = len(self.marker_history)  # Unique ID based on history size
+        marker.id = len(self.randomly_sampled_history)  # Unique ID based on history size
         marker.type = Marker.SPHERE
         marker.action = Marker.ADD
         marker.ns = 'random_point'
         marker.pose.position.x = goal_point.x
         marker.pose.position.y = goal_point.y
         marker.pose.position.z = goal_point.z
-        marker.scale.x = size
-        marker.scale.y = size
-        marker.scale.z = size
-        marker.color.a = color[3]
-        marker.color.r = color[0]
-        marker.color.g = color[1]
-        marker.color.b = color[2]
-
+        marker.scale = Vector3(x=size, y=size, z=size)
+        marker.color = ColorRGBA(r=color[0], g=color[1], b=color[2], a=color[3])
+        
         # Add the marker to the history
-        self.marker_history.append(marker)
+        self.randomly_sampled_history.append(marker)
 
         # Publish the entire history
-        marker_array = MarkerArray(markers=self.marker_history)
+        marker_array = MarkerArray(markers=self.randomly_sampled_history)
 
         self.marker_array_pub.publish(marker_array)
 
     def publish_line_strip(self, points):
 
         marker = Marker()
-        marker.header.frame_id = 'ego_racecar/base_link'  # Change to your desired frame
+        marker.header.frame_id = self.frame_base_link  # Change to your desired frame
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = 'line_strip'
-        marker.id = 0
         marker.type = Marker.LINE_STRIP
         marker.action = Marker.ADD
         marker.pose.orientation.w = 1.0
         marker.scale.x = 0.1  # Line width
-        marker.color.r = 1.0  # Red color
-        marker.color.a = 1.0  # Fully opaque
+        marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)    
 
         # Define the line strip points
         for point in points:
             marker.points.append(point)
 
         self.target_line_pub.publish(marker)
+
+    def publish_waypoint_strip(self, points):
+
+        marker = Marker()
+        marker.header.frame_id = self.frame_base_link 
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = 'waypoint'
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.1  # Line width
+        marker.color = ColorRGBA(r=0.2, g=0.0, b=0.5, a=1.0)
+
+        # Define the line strip points
+        for point in points:
+            marker.points.append(point)
+
+        self.target_waypoint_pub.publish(marker)
 
     def euler_to_quaternion(self, roll, pitch, yaw):
         cy = math.cos(yaw * 0.5)
@@ -295,6 +327,34 @@ class RRT(Node):
 
         return quaternion
 
+    def get_next_point(self, current_position):
+
+        # Find the closest waypoint to the current position
+        distances = np.linalg.norm(
+            self.waypoints - current_position, axis=1)
+        closest_waypoint_index = np.argmin(distances)
+
+        # Find the next waypoint to track
+        while True:
+            next_waypoint_index = (
+                closest_waypoint_index + 1) % len(self.waypoints)
+            distance_to_next_waypoint = np.linalg.norm(
+                self.waypoints[next_waypoint_index] - current_position)
+            if distance_to_next_waypoint > self.L:
+                break
+            closest_waypoint_index = next_waypoint_index
+
+        # Set the goal index to the next waypoint to track
+        self.goal_index = next_waypoint_index
+
+        self.goal_point_map = Point()
+        self.goal_point_map.x = self.waypoints[self.goal_index, 0]
+        self.goal_point_map.y = self.waypoints[self.goal_index, 1]
+        self.goal_point_map.z = 0.0
+
+        self.publish_point_marker(self.goal_point_map,
+                                frame='map', color=(1.0, 0.0, 1.0, 1.0), size=0.4)
+
     def pose_callback(self, pose_msg):
         """
         The pose callback when subscribed to particle filter's inferred pose
@@ -308,80 +368,87 @@ class RRT(Node):
         self.pose_msg = pose_msg
 
         # clean tree
-        self.marker_history = []
+        self.randomly_sampled_history = []
         self.clean_grid()
 
-
         # while new_node is not in goal_range
-        while True:
-        #   sample_free_space and choose one point
-            self.sample_free_space() # this will set self.chosen_point
-        #   choose the nearest node 
-        #       nearest_node = nearest(tree, sampled_point)
-            self.get_nearest_node() # this will set self.nearest_node_id
-
-        #   go move_percentage of the way from nearest_node to chosen_point, add to tree
-            new_node = self.update_step() # this adds to the tree
+        # while True:
+        current_position = np.array(
+            [pose_msg.pose.pose.position.x, pose_msg.pose.pose.position.y])
         
-        # for my own visualization
-            path = self.find_path(new_node)
-            self.publish_line_strip(path)
+        self.get_next_point(current_position)
 
-        #  check if new_node is in goal_range
-            if self.is_goal(new_node):
-                #  if yes, find_path
-                time.sleep(3)
-                self.marker_history = []
-                break
+        # Transform the goal point to the vehicle frame of reference
+        transformation = self.transform_goal_point()
+
+        goal_point_base_link = do_transform_point(
+            PointStamped(point=self.goal_point_map), transformation)
+
+        self.goal_point_base_link = goal_point_base_link.point
+
+        self.steer()
+        
+    #   sample_free_space and choose one point
+        self.sample_free_space() # this will set self.chosen_point
+    #   choose the nearest node 
+    #       nearest_node = nearest(tree, sampled_point)
+        self.get_nearest_node() # this will set self.nearest_node_id
+
+    #   go move_percentage of the way from nearest_node to chosen_point, add to tree
+        new_node = self.update_step() # this adds to the tree
+    
+    # for my own visualization
+        path = self.find_path(new_node)
+        self.publish_line_strip(path)
+
+    #  check if new_node is in goal_range
+        if self.is_goal(new_node):
+
+            # generate path 
+            path = self.find_path(new_node)
+            print(f"Path is {len(path)} long")
+            # interpolate the path to have more points
+            interpolated_path = []
+            for i in range(len(path) - 1):
+                interpolated_path.append(path[i])
+                interpolated_path.append(Point(x=(path[i].x + path[i+1].x)/2, y=(path[i].y + path[i+1].y)/2, z=0.0))
+            interpolated_path.append(path[-1])
+
+            self.waypoints = np.array(interpolated_path)
+
+            self.publish_line_strip(interpolated_path)
+            self.publish_waypoint_strip(self.waypoints)
+
+            # steer to path using pure pursuit
+
+            #  if yes, find_path
+            time.sleep(1)
+            self.randomly_sampled_history = []
+            # break
+
         # visualize the path
 
 
-        # Steer for path
-
-    def is_straight_line_clear(self, grid, a1, b1, a2, b2):
-        # Convert coordinates to integers
-        a1 = int(a1)
-        b1 = int(b1)
-        a2 = int(a2)
-        b2 = int(b2)
-        # Bresenham's line algorithm
-        dx = abs(a2 - a1)
-        dy = abs(b2 - b1)
-        if dx > dy:
-            p_inc = 2 * dy - dx
-            y = b1
-            for x in range(a1, a2 + 1 if a2 > a1 else a2 - 1, 1 if a2 > a1 else -1):
-                if grid[x, y] == 100:
-                    return False
-                if p_inc >= 0:
-                    y += 1 if b2 > b1 else -1
-                    p_inc -= 2 * dx
-                p_inc += 2 * dy
-        else:
-            p_inc = 2 * dx - dy
-            x = a1
-            for y in range(b1, b2 + 1 if b2 > b1 else b2 - 1, 1 if b2 > b1 else -1):
-                if grid[x, y] == 100:
-                    return False
-                if p_inc >= 0:
-                    x += 1 if a2 > a1 else -1
-                    p_inc -= 2 * dy
-                p_inc += 2 * dx
-        return True
 
     def sample_free_space(self):
         """
         This method should randomly sample the free space, and returns a viable point
         """
-        random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
 
-        self.chosen_point = Point()
-        self.chosen_point.x = random_point[0]
-        self.chosen_point.y = random_point[1]
-        self.chosen_point.z = 0.0
+        # choose a random point that is not in an occupied cell
+        while True:
+            random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+            self.chosen_point = Point()
+            self.chosen_point.x = random_point[0]
+            self.chosen_point.y = random_point[1]
+            self.chosen_point.z = 0.0
+            # if not self.line_intersects_occupied_cells(0, 0, self.chosen_point.x, self.chosen_point.y):
+                # print("Chosen point is not blocked")
+            break
+            # print("Chosen point is blocked")
 
         self.publish_marker_history(
-            self.chosen_point, frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0, 0.5), size=0.1)
+            self.chosen_point, frame=self.frame_base_link, color=(0.0, 1.0, 0.0, 0.5), size=0.1)
         
     def get_nearest_node(self):
         """
@@ -395,7 +462,7 @@ class RRT(Node):
             if LA.norm([point.x - self.chosen_point.x, point.y - self.chosen_point.y]) < min_dist:
                 self.nearest_node_id = i
                 min_dist = LA.norm([point.x - self.chosen_point.x, point.y - self.chosen_point.y])
-        
+
     def update_step(self):
         
         # Get the nearest node from chosen node
@@ -407,19 +474,24 @@ class RRT(Node):
         new_node.y = nearest_node.y + self.move_percentage * (self.chosen_point.y - nearest_node.y)
         new_node.id = len(self.tree.vertices)
 
+        # no optimization
+        # new_node.parent = nearest_node.id
+
         # check if parent should be nearest_node or it's parent 
         # if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
 
         #     new_node.parent = nearest_node.parent
         # else:
         #     new_node.parent = nearest_node.id
+
+        # check if parent should be nearest_node or one of it's ancestors
         prev = new_node
         dist = 0
         if nearest_node.parent:
             curr_point = self.tree.vertices[nearest_node.parent]
 
             while curr_point.parent is not None:
-                print(f"Current point is {curr_point.id}")
+                # print(f"Current point is {curr_point.id}")
                 dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
                 new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
                 if dist >= new_dist:
@@ -434,20 +506,10 @@ class RRT(Node):
 
         return new_node
 
-    def steer(self, new_node: MyPoint):
-        """
-        This method should return a point in the viable set such that it is closer 
-        to the nearest_node than sampled_point is.
-
-        Args:
-            nearest_node (Node): nearest node on the tree to the sampled point
-            sampled_point (tuple of (float, float)): sampled point
-        Returns:
-            new_node (Node): new node created from steering
-        """
+    def steer(self):
 
         # Calculate curvature/steering angle
-        curvature = 2 * new_node.y / self.L ** 2
+        curvature = 2 * self.goal_point_base_link.y / self.L ** 2
         curvature = curvature * 0.4
         steering_angle = max(-self.max_steering_angle,
                              min(self.max_steering_angle, curvature))
@@ -460,6 +522,18 @@ class RRT(Node):
         drive_msg.drive.speed = self.speed
         self.drive_pub.publish(drive_msg)
 
+    def transform_goal_point(self):
+        try:
+            t = self.tf_buffer.lookup_transform(
+                self.frame_base_link,
+                self.frame_map,
+                rclpy.time.Time())
+            return t
+        except TransformException as ex:
+            self.get_logger().info(
+                f'Could not transform {self.frame_map} to {self.frame_base_link}: {ex}')
+            return
+        
     def check_collision(self, nearest_node, new_node):
         """
         This method should return whether the path between nearest and new_node is
