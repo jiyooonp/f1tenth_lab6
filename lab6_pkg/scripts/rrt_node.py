@@ -353,7 +353,7 @@ class RRT(Node):
         self.goal_point_map.z = 0.0
 
         self.publish_point_marker(self.goal_point_map,
-                                frame='map', color=(1.0, 0.0, 1.0, 1.0), size=0.4)
+                                frame='ego_racecar/base_link', color=(1.0, 0.0, 1.0, 1.0), size=0.4)
 
     def pose_callback(self, pose_msg):
         """
@@ -377,14 +377,6 @@ class RRT(Node):
             [pose_msg.pose.pose.position.x, pose_msg.pose.pose.position.y])
         
         self.get_next_point(current_position)
-
-        # Transform the goal point to the vehicle frame of reference
-        transformation = self.transform_goal_point()
-
-        goal_point_base_link = do_transform_point(
-            PointStamped(point=self.goal_point_map), transformation)
-
-        self.goal_point_base_link = goal_point_base_link.point
 
         self.steer()
         
@@ -508,8 +500,16 @@ class RRT(Node):
 
     def steer(self):
 
+        # Transform the goal point to the vehicle frame of reference
+        # transformation = self.transform_goal_point()
+
+        # goal_point_base_link = do_transform_point(
+        #     PointStamped(point=self.goal_point_map), transformation)
+
+        # self.goal_point_base_link = goal_point_base_link.point
+
         # Calculate curvature/steering angle
-        curvature = 2 * self.goal_point_base_link.y / self.L ** 2
+        curvature = 2 * self.goal_point_map.y / self.L ** 2
         curvature = curvature * 0.4
         steering_angle = max(-self.max_steering_angle,
                              min(self.max_steering_angle, curvature))
