@@ -116,7 +116,7 @@ class RRT(Node):
         self.frame_map = 'map'
 
 
-        self.L = 2.0
+        self.L = 2.5
         self.speed = 0.1
         self.steering_angle = 0.0
         self.max_steering_angle = np.pi / 3
@@ -142,8 +142,8 @@ class RRT(Node):
 
         # Initialize the tree with the initial point
         initial_point = MyPoint()
-        initial_point.x = 0.0 #self.grid_size * self.grid_resolution / 2
-        initial_point.y = 0.0 #self.grid_size * self.grid_resolution / 2
+        initial_point.x = 0.0 
+        initial_point.y = 0.0
         initial_point.z = 0.0
         initial_point.id = 0
         initial_point.parent = None
@@ -158,7 +158,6 @@ class RRT(Node):
         self.x_coords = ranges * np.cos(angles)
         self.y_coords = ranges * -np.sin(angles)
 
-
         # Convert coordinates to grid indices
         grid_x = np.clip(np.floor((self.x_coords / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
         grid_y = np.clip(np.floor((self.y_coords / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
@@ -169,9 +168,10 @@ class RRT(Node):
 
         # Perform erosion on the occupancy grid
         self.grid = binary_dilation(
-            self.grid, structure=np.ones((5, 5))).astype(np.int8) 
+            self.grid, structure=np.ones((4, 4))).astype(np.int8) 
         
         self.grid *= 100
+
         # Publish occupancy grid
         self.publish_grid()
         
@@ -287,6 +287,7 @@ class RRT(Node):
             r=color[0], g=color[1], b=color[2], a=color[3])
 
         self.target_point_pp_pub.publish(marker)
+
     def publish_line_strip(self, points):
 
         marker = Marker()
@@ -311,14 +312,14 @@ class RRT(Node):
     def publish_waypoint_strip(self, points):
 
         marker = Marker()
-        marker.header.frame_id = self.frame_base_link 
+        marker.header.frame_id = self.frame_map
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = 'waypoint'
         marker.type = Marker.LINE_STRIP
         marker.action = Marker.ADD
         marker.pose.orientation.w = 1.0
         marker.scale.x = 0.2  # Line width
-        marker.color = ColorRGBA(r=0.2, g=0.0, b=0.5, a=1.0)
+        marker.color = ColorRGBA(r=0.2, g=0.2, b=0.5, a=1.0)
 
         # Define the line strip points
         for point in points:
@@ -414,12 +415,19 @@ class RRT(Node):
             # generate path 
             path = self.find_path(new_node)
             print(f"Path is {len(path)} long")
+
             # interpolate the path to have more points
             interpolated_path = []
             for i in range(len(path) - 1):
                 interpolated_path.append(path[i])
                 interpolated_path.append(Point(x=(path[i].x + path[i+1].x)/2, y=(path[i].y + path[i+1].y)/2, z=0.0))
             interpolated_path.append(path[-1])
+
+            # add the current_position to make it in the map frame 
+            for point in interpolated_path:
+                point.x += current_position[0]
+                point.y += current_position[1]
+
             self.local_waypoints = np.array(interpolated_path)
             self.local_count = 0
 
@@ -509,29 +517,29 @@ class RRT(Node):
             # new_node.parent = nearest_node.id
 
             # check if parent should be nearest_node or it's parent 
-            # if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
+            if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
 
-            #     new_node.parent = nearest_node.parent
-            # else:
-            #     new_node.parent = nearest_node.id
-
-            # check if parent should be nearest_node or one of it's ancestors
-            prev = new_node
-            dist = 0
-            if nearest_node.parent:
-                curr_point = self.tree.vertices[nearest_node.parent]
-
-                while curr_point.parent is not None:
-                    # print(f"Current point is {curr_point.id}")
-                    dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
-                    new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
-                    if dist >= new_dist:
-                        dist = new_dist
-                        new_node.parent = curr_point.id
-                    prev = curr_point
-                    curr_point = self.tree.vertices[curr_point.parent]
+                new_node.parent = nearest_node.parent
             else:
                 new_node.parent = nearest_node.id
+
+            # check if parent should be nearest_node or one of it's ancestors
+            # prev = new_node
+            # dist = 0
+            # if nearest_node.parent:
+            #     curr_point = self.tree.vertices[nearest_node.parent]
+
+            #     while curr_point.parent is not None:
+            #         # print(f"Current point is {curr_point.id}")
+            #         dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
+            #         new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
+            #         if dist >= new_dist:
+            #             dist = new_dist
+            #             new_node.parent = curr_point.id
+            #         prev = curr_point
+            #         curr_point = self.tree.vertices[curr_point.parent]
+            # else:
+            #     new_node.parent = nearest_node.id
 
             self.tree.vertices[new_node.id] = new_node
             return new_node
