@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-This file contains the class definition for tree nodes and RRT
-Before you start, please read: https://arxiv.org/pdf/1105.1186.pdf
-"""
+
 import numpy as np
 from numpy import linalg as LA
 import math
@@ -168,10 +165,12 @@ class RRT(Node):
 
         # Update occupancy grid
         self.grid.fill(0)
-        self.grid[grid_x, grid_y] = 1  # Mark occupied cells as 100
+        self.grid[grid_x, grid_y] = 1  
+
         # Perform erosion on the occupancy grid
         self.grid = binary_dilation(
             self.grid, structure=np.ones((5, 5))).astype(np.int8) 
+        
         self.grid *= 100
         # Publish occupancy grid
         self.publish_grid()
@@ -253,14 +252,6 @@ class RRT(Node):
 
         self.occupancy_pub.publish(occupancy_grid_msg)
 
-        # # Broadcast the transform with the corrected orientation
-        # transform = TransformStamped()
-        # transform.header.stamp = self.get_clock().now().to_msg()
-        # transform.header.frame_id = 'ego_racecar/base_link'
-        # transform.child_frame_id = 'ego_racecar/base_link'
-        # transform.transform.rotation = q
-        # self.tf_broadcaster.sendTransform(transform)
-
     def publish_point_marker(self, goal_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.3):
 
         # Publish a marker for the goal point
@@ -311,8 +302,6 @@ class RRT(Node):
         # Define the line strip points
         for point in points:
             marker.points.append(point)
-
-        # self.target_line_pub.publish(marker)
 
         self.line_strip_history.markers.append(marker)
 
@@ -388,22 +377,10 @@ class RRT(Node):
                                 frame='ego_racecar/base_link', color=(1.0, 0.0, 1.0, 1.0), size=0.4)
 
     def pose_callback(self, pose_msg):
-        """
-        The pose callback when subscribed to particle filter's inferred pose
-        Here is where the main RRT loop happens
-
-        Args: 
-            pose_msg (PoseStamped): incoming message from subscribed topic
-        Returns:
-
-        """
         # Publish the waypoints
         self.publish_waypoints()
         
         self.pose_msg = pose_msg
-
-        # clean tree
-        # self.clean_grid()
 
         # while new_node is not in goal_range
         # while True:
@@ -427,7 +404,6 @@ class RRT(Node):
             # new_node = self.update_step()  # this adds to the tree
             new_node = self.update_step_collision()  # this adds to the tree
     
-    # for my own visualization
         path = self.find_path(new_node)
         self.publish_line_strip(path)
 
@@ -451,23 +427,13 @@ class RRT(Node):
 
             # steer to path using pure pursuit
 
-            #  if yes, find_path
             print("found path")
             time.sleep(4)
+            self.line_strip_history = MarkerArray()
 
             self.clean_grid()
             
-            # break
-
-        # visualize the path
-
-
-
     def sample_free_space(self):
-        """
-        This method should randomly sample the free space, and returns a viable point
-        """
-
         # choose a random point that is not in an occupied cell
         while True:
             random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
@@ -482,10 +448,6 @@ class RRT(Node):
 
 
     def get_nearest_node(self):
-        """
-        This method should return the nearest node on the tree to the sampled point
-        """
-
         self.nearest_node_id = 0
         min_dist = 1000000
 
@@ -496,9 +458,6 @@ class RRT(Node):
 
 
     def check_collision(self, nearest_node, new_node):
-        """
-        This method checks if the path between nearest_node and new_node is collision-free.
-        """
         # Define the line equation parameters (y = mx + c)
         if nearest_node.x < new_node.x:
             x1, y1 = nearest_node.x, nearest_node.y
@@ -518,7 +477,6 @@ class RRT(Node):
 
         # Traverse along the line segment and check each cell in the occupancy grid
         num_steps = int(max(abs(x2 - x1), abs(y2 - y1))/self.grid_resolution)
-        # print(f"Num steps is {num_steps}")
 
         x_step = (x2 - x1) / num_steps
         y_step = (y2 - y1) / num_steps
@@ -529,17 +487,8 @@ class RRT(Node):
             x = x1 + i * x_step
             y = y1 + i * y_step
 
-            print(f"Checking cell {x}, {y}")
-
-            # Convert coordinates to grid indices
-            # print(f"x: {x}, y: {y}, grid_res: {self.grid_resolution}, grid_size: {self.grid_size}")
-            # grid_x = int((x / self.grid_resolution) + (self.grid_size / 2))
-            # grid_y = int((y / self.grid_resolution) + (self.grid_size / 2))
-
             grid_x = np.clip(np.floor((x / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
             grid_y = np.clip(np.floor((y / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
-
-            print(f"Checking cell {grid_x}, {grid_y}, {self.grid[grid_x, grid_y]}, {self.grid[grid_y, grid_x]}")
 
             # Check if the cell is occupied
             if self.grid[grid_x, grid_y] != 0:
@@ -651,21 +600,12 @@ class RRT(Node):
             return
         
     def is_goal(self, current_point):
-        """
-        This method should return whether the latest added node is close enough
-        to the goal.
-        """
         dist = LA.norm([current_point.x - self.local_goal[0], current_point.y - self.local_goal[1]])
         if dist < self.goal_dist_threshold:
             return True
         return False
 
     def find_path(self, current_point):
-        """
-        This method returns a path as a list of Nodes connecting the starting point to
-        the goal once the latest added node is close enough to the goal
-        """
-
         path = []
 
         while current_point and (current_point.parent is not None):
