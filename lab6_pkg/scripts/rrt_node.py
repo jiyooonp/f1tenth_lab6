@@ -22,6 +22,8 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_geometry_msgs import do_transform_point
 
+from scipy.ndimage import binary_dilation
+
 import time
 
 
@@ -161,15 +163,16 @@ class RRT(Node):
 
 
         # Convert coordinates to grid indices
-        grid_x = np.clip(np.floor((self.x_coords / self.grid_resolution) +
-                         (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
-        grid_y = np.clip(np.floor((self.y_coords / self.grid_resolution) +
-                         (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+        grid_x = np.clip(np.floor((self.x_coords / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+        grid_y = np.clip(np.floor((self.y_coords / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
 
         # Update occupancy grid
         self.grid.fill(0)
-        self.grid[grid_x, grid_y] = 100  # Mark occupied cells as 100
-
+        self.grid[grid_x, grid_y] = 1  # Mark occupied cells as 100
+        # Perform erosion on the occupancy grid
+        self.grid = binary_dilation(
+            self.grid, structure=np.ones((5, 5))).astype(np.int8) 
+        self.grid *= 100
         # Publish occupancy grid
         self.publish_grid()
         
@@ -245,9 +248,6 @@ class RRT(Node):
 
         # Rotate the grid data based on the car's orientation
         rotated_grid = np.rot90(self.grid, k=1)  # Rotate 180 degrees
-
-        # Update the occupancy grid with the rotated grid
-        self.grid = rotated_grid
 
         occupancy_grid_msg.data = np.ravel(rotated_grid).tolist()
 
@@ -500,8 +500,12 @@ class RRT(Node):
         This method checks if the path between nearest_node and new_node is collision-free.
         """
         # Define the line equation parameters (y = mx + c)
-        x1, y1 = nearest_node.x, nearest_node.y
-        x2, y2 = new_node.x, new_node.y
+        if nearest_node.x < new_node.x:
+            x1, y1 = nearest_node.x, nearest_node.y
+            x2, y2 = new_node.x, new_node.y
+        else:
+            x1, y1 = new_node.x, new_node.y
+            x2, y2 = nearest_node.x, nearest_node.y
 
         # Calculate slope (m)
         if x2 - x1 != 0:
@@ -514,7 +518,7 @@ class RRT(Node):
 
         # Traverse along the line segment and check each cell in the occupancy grid
         num_steps = int(max(abs(x2 - x1), abs(y2 - y1))/self.grid_resolution)
-        print(f"Num steps is {num_steps}")
+        # print(f"Num steps is {num_steps}")
 
         x_step = (x2 - x1) / num_steps
         y_step = (y2 - y1) / num_steps
@@ -528,12 +532,17 @@ class RRT(Node):
             print(f"Checking cell {x}, {y}")
 
             # Convert coordinates to grid indices
-            print(f"x: {x}, y: {y}, grid_res: {self.grid_resolution}, grid_size: {self.grid_size}")
-            grid_x = int((x / self.grid_resolution) + (self.grid_size / 2))
-            grid_y = int((y / self.grid_resolution) + (self.grid_size / 2))
+            # print(f"x: {x}, y: {y}, grid_res: {self.grid_resolution}, grid_size: {self.grid_size}")
+            # grid_x = int((x / self.grid_resolution) + (self.grid_size / 2))
+            # grid_y = int((y / self.grid_resolution) + (self.grid_size / 2))
+
+            grid_x = np.clip(np.floor((x / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+            grid_y = np.clip(np.floor((y / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+
+            print(f"Checking cell {grid_x}, {grid_y}, {self.grid[grid_x, grid_y]}, {self.grid[grid_y, grid_x]}")
 
             # Check if the cell is occupied
-            if self.grid[grid_x, grid_y] == 100:
+            if self.grid[grid_x, grid_y] != 0:
                 return False  # Path is not collision-free
 
         return True  # Path is collision-free
