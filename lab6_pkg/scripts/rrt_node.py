@@ -219,6 +219,7 @@ class RRT(Node):
         marker_array = MarkerArray(markers=self.randomly_sampled_history)
 
         self.marker_array_pub.publish(marker_array)
+
     def publish_grid(self):
 
         occupancy_grid_msg = OccupancyGrid()
@@ -459,12 +460,8 @@ class RRT(Node):
 
     def check_collision(self, nearest_node, new_node):
         # Define the line equation parameters (y = mx + c)
-        if nearest_node.x < new_node.x:
-            x1, y1 = nearest_node.x, nearest_node.y
-            x2, y2 = new_node.x, new_node.y
-        else:
-            x1, y1 = new_node.x, new_node.y
-            x2, y2 = nearest_node.x, nearest_node.y
+        x1, y1 = nearest_node.x, nearest_node.y
+        x2, y2 = new_node.x, new_node.y
 
         # Calculate slope (m)
         if x2 - x1 != 0:
@@ -507,55 +504,40 @@ class RRT(Node):
             new_node.x = nearest_node.x + self.move_percentage * (self.chosen_point.x - nearest_node.x)
             new_node.y = nearest_node.y + self.move_percentage * (self.chosen_point.y - nearest_node.y)
             new_node.id = len(self.tree.vertices)
-            new_node.parent = nearest_node.id
+
+            # no optimization
+            # new_node.parent = nearest_node.id
+
+            # check if parent should be nearest_node or it's parent 
+            # if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
+
+            #     new_node.parent = nearest_node.parent
+            # else:
+            #     new_node.parent = nearest_node.id
+
+            # check if parent should be nearest_node or one of it's ancestors
+            prev = new_node
+            dist = 0
+            if nearest_node.parent:
+                curr_point = self.tree.vertices[nearest_node.parent]
+
+                while curr_point.parent is not None:
+                    # print(f"Current point is {curr_point.id}")
+                    dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
+                    new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
+                    if dist >= new_dist:
+                        dist = new_dist
+                        new_node.parent = curr_point.id
+                    prev = curr_point
+                    curr_point = self.tree.vertices[curr_point.parent]
+            else:
+                new_node.parent = nearest_node.id
 
             self.tree.vertices[new_node.id] = new_node
             return new_node
         else:
             # Path is not collision-free, return None or handle accordingly
             return None
-    def update_step(self):
-        
-        # Get the nearest node from chosen node
-        nearest_node = self.tree.vertices[self.nearest_node_id]
-
-        # from nearest_node to chosen_point, draw a line and go move_percentage of the way
-        new_node = MyPoint()
-        new_node.x = nearest_node.x + self.move_percentage * (self.chosen_point.x - nearest_node.x)
-        new_node.y = nearest_node.y + self.move_percentage * (self.chosen_point.y - nearest_node.y)
-        new_node.id = len(self.tree.vertices)
-
-        # no optimization
-        new_node.parent = nearest_node.id
-
-        # check if parent should be nearest_node or it's parent 
-        # if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
-
-        #     new_node.parent = nearest_node.parent
-        # else:
-        #     new_node.parent = nearest_node.id
-
-        # check if parent should be nearest_node or one of it's ancestors
-        # prev = new_node
-        # dist = 0
-        # if nearest_node.parent:
-        #     curr_point = self.tree.vertices[nearest_node.parent]
-
-        #     while curr_point.parent is not None:
-        #         # print(f"Current point is {curr_point.id}")
-        #         dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
-        #         new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
-        #         if dist >= new_dist:
-        #             dist = new_dist
-        #             new_node.parent = curr_point.id
-        #         prev = curr_point
-        #         curr_point = self.tree.vertices[curr_point.parent]
-        # else:
-        #     new_node.parent = nearest_node.id
-
-        self.tree.vertices[new_node.id] = new_node
-
-        return new_node
 
     def steer(self):
 
