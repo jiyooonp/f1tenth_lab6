@@ -55,6 +55,7 @@ install(PROGRAMS
   scripts/rrt_node.py
   scripts/occupancy_grid.py
   scripts/pure_pursuit_node.py
+  scripts/my_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
