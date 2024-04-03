@@ -158,7 +158,7 @@ class RRT(Node):
         self.local_goal = [self.goal_point_map.x, self.goal_point_map.y]
 
         self.my_viz.publish_point_marker(self.goal_point_map,
-                                frame='ego_racecar/base_link', color=(1.0, 0.0, 1.0, 1.0), size=0.4)
+                                frame='map', color=(1.0, 0.0, 1.0, 1.0), size=0.4)
         
     def get_next_steer_point(self, current_position):
 
