@@ -180,11 +180,6 @@ class RRT(Node):
         # Set the goal index to the next waypoint to track
         self.steer_goal_index = next_waypoint_index
 
-        if LA.norm([self.local_waypoints[self.steer_goal_index, 0] - current_position[0], self.local_waypoints[self.steer_goal_index, 1] - current_position[1]]) < self.goal_dist_threshold:
-            self.done_steering = True
-            print("steering complete!")
-            return
-
         self.steer_goal_point_map = Point()
         self.steer_goal_point_map.x = self.local_waypoints[self.steer_goal_index, 0]
         self.steer_goal_point_map.y = self.local_waypoints[self.steer_goal_index, 1]
@@ -206,10 +201,12 @@ class RRT(Node):
                 # print("steering")
                 self.steer()
             else:
+                self.stop()
                 print("have waypoint but done steering, thus will rrt")
                 self.rrt()
         else:
             print("don't have waypoints, thus will rrt")
+            self.stop()
             self.rrt()
         
     def rrt(self):
@@ -240,6 +237,10 @@ class RRT(Node):
             interpolated_path.append([path[-1].x, path[-1].y])
 
             print(f"interp path is {len(interpolated_path)} long")
+
+            # reverse the path
+            interpolated_path = interpolated_path[::-1]
+
             # add the current_position to make it in the map frame 
             for point in interpolated_path:
                 point[0] += self.current_position[0]
@@ -371,12 +372,27 @@ class RRT(Node):
             # Path is not collision-free, return None or handle accordingly
             return None
 
+    def stop(self):
+
+        # Publish the drive message
+        drive_msg = AckermannDriveStamped()
+        drive_msg.header.stamp = self.pose_msg.header.stamp
+        drive_msg.header.frame_id = self.pose_msg.header.frame_id
+        drive_msg.drive.steering_angle = 0.0
+        drive_msg.drive.speed = 0.0
+        self.drive_pub.publish(drive_msg)
+
     def steer(self):
 
         self.done_steering = False
 
+
         self.get_next_steer_point(self.current_position)
-        print("selected index:", self.steer_goal_index, "-> ", self.steer_goal_point_map)
+        # print("selected index:", self.steer_goal_index, "-> ", self.steer_goal_point_map)
+        if LA.norm([self.local_waypoints[-1, 0] - self.current_position[0], self.local_waypoints[-1, 1] - self.current_position[1]]) < self.goal_dist_threshold * 2:
+            self.done_steering = True
+            print("steering complete!")
+            return
         
 
         # Transform the goal point to the vehicle frame of reference
