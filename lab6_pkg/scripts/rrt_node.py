@@ -13,7 +13,6 @@ from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 
-from tf2_ros import TransformBroadcaster
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -95,6 +94,8 @@ class RRT(Node):
             '/waypoints',
             10)
         
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Occupancy grid variables
         self.grid_resolution = 0.1  # meters per cell
@@ -117,6 +118,7 @@ class RRT(Node):
 
 
         self.L = 2.5
+        self.steer_L = 0.3
         self.speed = 0.1
         self.steering_angle = 0.0
         self.max_steering_angle = np.pi / 3
@@ -323,7 +325,7 @@ class RRT(Node):
 
         # Define the line strip points
         for point in points:
-            marker.points.append(point)
+            marker.points.append(Point(x=point[0], y=point[1], z=0.0))
 
         self.target_waypoint_pub.publish(marker)
 
@@ -377,6 +379,37 @@ class RRT(Node):
 
         self.publish_point_marker(self.goal_point_map,
                                 frame='ego_racecar/base_link', color=(1.0, 0.0, 1.0, 1.0), size=0.4)
+        
+    def get_next_steer_point(self, current_position):
+
+        # Find the closest waypoint to the current position
+        distances = np.linalg.norm(
+            self.local_waypoints - current_position, axis=1)
+        closest_waypoint_index = np.argmin(distances)
+
+        # Find the next waypoint to track
+        while True:
+            next_waypoint_index = (
+                closest_waypoint_index + 1) % len(self.local_waypoints)
+            distance_to_next_waypoint = np.linalg.norm(
+                self.local_waypoints[next_waypoint_index] - current_position)
+            if distance_to_next_waypoint > self.steer_L:
+                break
+            closest_waypoint_index = next_waypoint_index
+
+        # Set the goal index to the next waypoint to track
+        self.steer_goal_index = next_waypoint_index
+
+        self.steer_goal_point_map = Point()
+        self.steer_goal_point_map.x = self.local_waypoints[self.steer_goal_index, 0]
+        self.steer_goal_point_map.y = self.local_waypoints[self.steer_goal_index, 1]
+        self.steer_goal_point_map.z = 0.0
+
+        self.steer_local_goal = [
+            self.steer_goal_point_map.x, self.steer_goal_point_map.y]
+
+        # self.publish_point_marker(self.steer_goal_point_map,
+        #                           frame='ego_racecar/base_link', color=(0.2, 1.0, 0.0, 1.0), size=0.4)
 
     def pose_callback(self, pose_msg):
         # Publish the waypoints
@@ -384,26 +417,23 @@ class RRT(Node):
         
         self.pose_msg = pose_msg
 
-        # while new_node is not in goal_range
-        # while True:
         current_position = np.array(
             [pose_msg.pose.pose.position.x, pose_msg.pose.pose.position.y])
+        
+        self.current_position = current_position
         
         self.get_next_point(current_position)
 
         if self.local_waypoints is not None:
+            print("steering")
             self.steer()
         
-    #   sample_free_space and choose one point
         new_node = None
         while new_node is None:
             self.sample_free_space() # this will set self.chosen_point
-        #   choose the nearest node 
-        #       nearest_node = nearest(tree, sampled_point)
             self.get_nearest_node() # this will set self.nearest_node_id
 
         #   go move_percentage of the way from nearest_node to chosen_point, add to tree
-            # new_node = self.update_step()  # this adds to the tree
             new_node = self.update_step_collision()  # this adds to the tree
     
         path = self.find_path(new_node)
@@ -419,16 +449,16 @@ class RRT(Node):
             # interpolate the path to have more points
             interpolated_path = []
             for i in range(len(path) - 1):
-                interpolated_path.append(path[i])
-                interpolated_path.append(Point(x=(path[i].x + path[i+1].x)/2, y=(path[i].y + path[i+1].y)/2, z=0.0))
-            interpolated_path.append(path[-1])
+                interpolated_path.append([path[i].x, path[i].y])
+                interpolated_path.append([(path[i].x + path[i+1].x)/2, (path[i].y + path[i+1].y)/2])
+            interpolated_path.append([path[-1].x, path[-1].y])
 
             # add the current_position to make it in the map frame 
             for point in interpolated_path:
-                point.x += current_position[0]
-                point.y += current_position[1]
+                point[0] += current_position[0]
+                point[1] += current_position[1]
 
-            self.local_waypoints = np.array(interpolated_path)
+            self.local_waypoints = np.array(interpolated_path).reshape(-1, 2)
             self.local_count = 0
 
             # self.publish_line_strip(interpolated_path)
@@ -437,7 +467,7 @@ class RRT(Node):
             # steer to path using pure pursuit
 
             print("found path")
-            time.sleep(4)
+            time.sleep(1)
             self.line_strip_history = MarkerArray()
 
             self.clean_grid()
@@ -549,22 +579,22 @@ class RRT(Node):
 
     def steer(self):
 
+        self.get_next_steer_point(self.current_position)
+
         # Transform the goal point to the vehicle frame of reference
-        # transformation = self.transform_goal_point()
+        transformation = self.transform_goal_point()
 
-        # goal_point_base_link = do_transform_point(
-        #     PointStamped(point=self.goal_point_map), transformation)
+        goal_point_base_link = do_transform_point(
+            PointStamped(point=self.steer_goal_point_map), transformation)
 
-        # self.goal_point_base_link = goal_point_base_link.point
+        goal_point_base_link = goal_point_base_link.point
 
-        self.publish_pp_marker(
-            self.local_waypoints[self.local_count], frame='ego_racecar/base_link', color=(0.0, 1.0, 0.0, 1.0), size=0.4)
-        self.local_count += 1
-        if self.local_count >= len(self.local_waypoints):
-            self.local_count = len(self.local_waypoints) - 1
+        self.publish_pp_marker(goal_point_base_link,
+            frame='map', color=(0.2, 1.0, 0.0, 1.0), size=0.4)
 
         # Calculate curvature/steering angle
-        curvature = 2 * self.local_waypoints[-1].y / self.L ** 2
+        print(f"Goal point is {goal_point_base_link.x}, {goal_point_base_link.y}")
+        curvature = 2 * goal_point_base_link.y / self.steer_L ** 2
         curvature = curvature * 0.4
         steering_angle = max(-self.max_steering_angle,
                              min(self.max_steering_angle, curvature))
@@ -575,7 +605,8 @@ class RRT(Node):
         drive_msg.header.frame_id = self.pose_msg.header.frame_id
         drive_msg.drive.steering_angle = steering_angle
         drive_msg.drive.speed = self.speed
-        # self.drive_pub.publish(drive_msg)
+        self.drive_pub.publish(drive_msg)
+        print("steering done")
 
     def transform_goal_point(self):
         try:
