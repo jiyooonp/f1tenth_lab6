@@ -75,7 +75,7 @@ class RRT(Node):
 
         self.L = 2.5
 
-        self.steer_L = 0.5
+        self.steer_L = 0.4
         self.speed = 0.3
 
         self.steering_angle = 0.0
@@ -98,6 +98,9 @@ class RRT(Node):
         self.dilate_size = 5
 
         self.first_grid = True
+
+        self.steer_goal_index = 0
+        self.goal_index = 0
 
     def clean_grid(self):
 
@@ -146,13 +149,14 @@ class RRT(Node):
     def get_next_point(self, current_position):
 
         # Find the closest waypoint to the current position
-        distances = np.linalg.norm( self.waypoints - current_position, axis=1)
-        closest_waypoint_index = np.argmin(distances)
+        distances = np.linalg.norm(
+            self.waypoints - current_position, axis=1)
+        closest_waypoint_index = self.goal_index -1 # np.argmin(distances)
 
         # Find the next waypoint to track
         while True:
-            next_waypoint_index = (
-                closest_waypoint_index + 1) % len(self.waypoints)
+            next_waypoint_index = min(
+                closest_waypoint_index + 1, len(self.waypoints)-1)
             distance_to_next_waypoint = np.linalg.norm(
                 self.waypoints[next_waypoint_index] - current_position)
             if distance_to_next_waypoint > self.L:
@@ -176,23 +180,22 @@ class RRT(Node):
     def get_next_steer_point(self, current_position):
 
         # Find the closest waypoint to the current position
-        distances = np.linalg.norm(
-            self.local_waypoints - current_position, axis=1)
-        closest_waypoint_index = np.argmin(distances)
+        # distances = np.linalg.norm(
+        #     self.local_waypoints - current_position, axis=1)
+        closest_waypoint_index = self.steer_goal_index -1 # np.argmin(distances)
 
         # Find the next waypoint to track
-        while True:
-            next_waypoint_index = (
-                closest_waypoint_index + 1) % len(self.local_waypoints)
+        while True and (self.local_waypoints is not None):
+            
+            next_waypoint_index = min(
+                closest_waypoint_index + 1, len(self.local_waypoints)-1)
+            
             distance_to_next_waypoint = np.linalg.norm(
                 self.local_waypoints[next_waypoint_index] - current_position)
-
-            # Check if the next waypoint index has wrapped around to 0
-            if next_waypoint_index == 0:
-                distance_to_next_waypoint = np.linalg.norm(
-                    self.local_waypoints[0] - current_position)
-
-            if distance_to_next_waypoint > self.steer_L:
+            print(
+                f"next wyapoint: {closest_waypoint_index}, len: {len(self.local_waypoints)}, dist: {round(distance_to_next_waypoint, 2)}")
+            
+            if distance_to_next_waypoint >= self.steer_L:
                 break
             closest_waypoint_index = next_waypoint_index
 
@@ -212,7 +215,7 @@ class RRT(Node):
         self.current_position = np.array(
             [pose_msg.pose.pose.position.x, pose_msg.pose.pose.position.y])
         
-        self.get_next_point(self.current_position)
+        self.get_next_point([self.current_position[0], self.current_position[1]])
 
         if self.local_waypoints is not None:
             if not self.done_steering:
@@ -407,7 +410,10 @@ class RRT(Node):
 
         self.get_next_steer_point(self.current_position)
 
-        if LA.norm([self.local_waypoints[-1, 0] - self.current_position[0], self.local_waypoints[-1, 1] - self.current_position[1]]) < self.steer_L:
+        distance_to_local_goal = LA.norm([self.local_waypoints[-1, 0] - self.current_position[0], self.local_waypoints[-1, 1] - self.current_position[1]])
+
+        print("distance to local goal", distance_to_local_goal)
+        if distance_to_local_goal < self.goal_dist_threshold:
             self.done_steering = True
             self.local_waypoints = None
             self.grid = np.zeros(
@@ -479,9 +485,8 @@ class RRT(Node):
 
         dist = LA.norm(
             [current_point.x - goal_point_base_link.x, current_point.y - goal_point_base_link.y])
-        print("current position", self.current_position)
-        print(f"new point {round(current_point.x , 2), round(current_point.y, 2)} goal {round(goal_point_base_link.x, 2), round(goal_point_base_link.y, 2)} dist {round(dist, 2)}")
-        input("press enter")
+
+        # input("press enter")
 
         if dist <= self.goal_dist_threshold:
             return True
