@@ -243,11 +243,11 @@ class MyViz(Node):
 
         self.target_line_history_pub.publish(self.line_strip_history)
 
-    def publish_waypoint_strip(self, points, time_stamp):
+    def publish_waypoint_strip(self, points):
 
         marker = Marker()
         marker.header.frame_id = self.frame_map
-        marker.header.stamp = time_stamp
+        # marker.header.stamp = time_stamp
         marker.ns = 'waypoint'
         marker.type = Marker.LINE_STRIP
         marker.action = Marker.ADD
@@ -269,6 +269,7 @@ class MyViz(Node):
             marker.header.frame_id = frame
             # Unique ID based on history size
             marker.id = len(waypoints)
+            # marker.type = Marker.SPHERE
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
             marker.ns = 'random_point'

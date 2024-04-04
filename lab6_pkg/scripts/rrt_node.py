@@ -49,6 +49,7 @@ class RRT(Node):
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+
         self.tf_buffer1 = Buffer()
         self.tf_listener1 = TransformListener(self.tf_buffer1, self)
 
@@ -75,8 +76,8 @@ class RRT(Node):
 
         self.L = 2.5
 
-        self.steer_L = 0.4
-        self.speed = 0.3
+        self.steer_L = 0.2
+        self.speed = 0.25
 
         self.steering_angle = 0.0
         self.max_steering_angle = np.pi / 3
@@ -149,9 +150,7 @@ class RRT(Node):
     def get_next_point(self, current_position):
 
         # Find the closest waypoint to the current position
-        distances = np.linalg.norm(
-            self.waypoints - current_position, axis=1)
-        closest_waypoint_index = self.goal_index -1 # np.argmin(distances)
+        closest_waypoint_index = self.goal_index -1 
 
         # Find the next waypoint to track
         while True:
@@ -179,9 +178,6 @@ class RRT(Node):
 
     def get_next_steer_point(self, current_position):
 
-        # Find the closest waypoint to the current position
-        # distances = np.linalg.norm(
-        #     self.local_waypoints - current_position, axis=1)
         closest_waypoint_index = self.steer_goal_index -1 # np.argmin(distances)
 
         # Find the next waypoint to track
@@ -192,9 +188,6 @@ class RRT(Node):
             
             distance_to_next_waypoint = np.linalg.norm(
                 self.local_waypoints[next_waypoint_index] - current_position)
-            print(
-                f"next wyapoint: {closest_waypoint_index}, len: {len(self.local_waypoints)}, dist: {round(distance_to_next_waypoint, 2)}")
-            
             if distance_to_next_waypoint >= self.steer_L:
                 break
             closest_waypoint_index = next_waypoint_index
@@ -219,14 +212,11 @@ class RRT(Node):
 
         if self.local_waypoints is not None:
             if not self.done_steering:
-                # print("steering")
                 self.steer()
             else:
                 self.stop()
-                print("have waypoint but done steering, thus will rrt")
                 self.rrt()
         else:
-            # print("don't have waypoints, thus will rrt", self.local_goal)
             self.stop()
             self.rrt()
         
@@ -266,7 +256,6 @@ class RRT(Node):
             # reverse the path
             interpolated_path = interpolated_path[::-1]
 
-            # add the current_position to make it in the map frame 
             # Transform the goal point to the vehicle frame of reference
             transformation = self.transform_goal_point_base_to_map()
 
@@ -280,16 +269,12 @@ class RRT(Node):
                 # path_in_map.append([point[0], point[1]])
 
             self.local_waypoints = np.array(path_in_map).reshape(-1, 2)
-            # self.local_waypoints = np.array(path)
-
-            # self.publish_line_strip(interpolated_path)
-            # self.my_viz.publish_waypoint_strip(self.local_waypoints, self.get_clock().now().to_msg())
-            self.my_viz.publish_waypoint_sphere(self.local_waypoints, frame='map', color=(0.0, 1.0, 1.0, 1.0), size=0.3)
+            # self.my_viz.publish_waypoint_sphere(self.local_waypoints, frame='map', color=(0.0, 1.0, 1.0, 1.0), size=0.3)
+            self.my_viz.publish_waypoint_strip(self.local_waypoints)
 
             # steer to path using pure pursuit
-
             print("found path")
-            time.sleep(1)
+            # time.sleep(1)
             self.done_steering = False
 
             self.my_viz.line_strip_history = MarkerArray()
@@ -299,14 +284,11 @@ class RRT(Node):
     def sample_free_space(self):
         # choose a random point that is not in an occupied cell
 
-        # while True:
         random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
         self.chosen_point = Point()
         self.chosen_point.x = random_point[0]
         self.chosen_point.y = random_point[1]
         self.chosen_point.z = 0.0
-            # if not self.check_collision(Point(x = self.current_position[0], y = self.current_position[1], z = 0.0), self.chosen_point):
-            # break
 
         self.my_viz.publish_marker_history(
             self.chosen_point, frame=self.frame_base_link, color=(1.0, 1.0, 0.0, 1.0), size=0.1)
@@ -339,8 +321,6 @@ class RRT(Node):
             rotated_x, rotated_y = grid_y,  grid_x
 
             if self.my_viz.grid[rotated_x, rotated_y] != 0:
-                # print(
-                #     f"collision at {rotated_x}, {rotated_y}, => {self.my_viz.grid[rotated_x, rotated_y]} ")
                 return True  # Path is not collision-free
 
         return False  # Path is collision-free
@@ -391,7 +371,6 @@ class RRT(Node):
             return new_node
         else:
             # Path is not collision-free, return None or handle accordingly
-            # print("path has collision")
             return None
 
     def stop(self):
@@ -412,7 +391,6 @@ class RRT(Node):
 
         distance_to_local_goal = LA.norm([self.local_waypoints[-1, 0] - self.current_position[0], self.local_waypoints[-1, 1] - self.current_position[1]])
 
-        print("distance to local goal", distance_to_local_goal)
         if distance_to_local_goal < self.goal_dist_threshold:
             self.done_steering = True
             self.local_waypoints = None
