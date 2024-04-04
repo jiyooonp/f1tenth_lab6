@@ -6,10 +6,10 @@ from numpy import linalg as LA
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PointStamped, Pose, Point, Quaternion, TransformStamped, Twist, Vector3
+from geometry_msgs.msg import PointStamped, Point
 from nav_msgs.msg import Odometry
-from visualization_msgs.msg import Marker, MarkerArray
-from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
+from visualization_msgs.msg import MarkerArray
+from ackermann_msgs.msg import AckermannDriveStamped
 
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
@@ -46,21 +46,24 @@ class RRT(Node):
             '/drive',
             10)
         
-        self.my_viz = MyViz()
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Occupancy grid variables
         self.grid_resolution = 0.1  # meters per cell
-        self.grid_size = 100
+        self.grid_size = 60
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8) 
+
+        self.my_viz = MyViz()
+        self.my_viz.grid_resolution = self.grid_resolution
+        self.my_viz.grid_size = self.grid_size
 
         self.local_goal = [2., 0.]
         
         # RRT variables
-        self.move_percentage = 0.5
-        self.goal_dist_threshold = 0.3
+        self.move_percentage = 0.4
+        self.goal_dist_threshold = 0.2
 
         self.clean_grid()
 
@@ -68,11 +71,10 @@ class RRT(Node):
         self.frame_base_link = 'ego_racecar/base_link'
         self.frame_map = 'map'
 
-
         self.L = 2.5
 
-        self.steer_L = 0.3
-        self.speed = 0.1
+        self.steer_L = 0.5
+        self.speed = 0.3
 
         self.steering_angle = 0.0
         self.max_steering_angle = np.pi / 3
@@ -91,6 +93,9 @@ class RRT(Node):
         self.done_steering = False
 
         self.collision_check_step = 50
+        self.dilate_size = 5
+
+        self.first_grid = True
 
     def clean_grid(self):
 
@@ -106,6 +111,7 @@ class RRT(Node):
         self.tree.vertices[0] = initial_point
 
     def scan_callback(self, msg):
+        self.first_grid = False
 
         angles = np.arange(msg.angle_min, msg.angle_max, msg.angle_increment)
         ranges = np.array(msg.ranges)
@@ -124,18 +130,13 @@ class RRT(Node):
 
         # Perform erosion on the occupancy grid
         self.grid = binary_dilation(
-            self.grid, structure=np.ones((3, 3))).astype(np.int8) 
+            self.grid, structure=np.ones((self.dilate_size, self.dilate_size))).astype(np.int8) 
         
         self.grid *= 100
 
         self.grid_viz = np.rot90(self.grid, k=1)  # Rotate 180 degrees
 
         self.my_viz.grid = self.grid_viz
-        print("grid updated")
-
-        # print the indexes
-        for i in range(len(grid_x)):
-            print(f"grid_x: {grid_x[i]}, grid_y: {grid_y[i]}, {self.grid[grid_x[i], grid_y[i]]}")
 
         # Publish occupancy grid
         self.my_viz.publish_grid(self.get_clock().now().to_msg())
@@ -169,6 +170,7 @@ class RRT(Node):
         self.my_viz.publish_point_marker(self.goal_point_map,
                                 frame='map', color=(1.0, 0.0, 1.0, 1.0), size=0.4)
         
+
     def get_next_steer_point(self, current_position):
 
         # Find the closest waypoint to the current position
@@ -182,6 +184,12 @@ class RRT(Node):
                 closest_waypoint_index + 1) % len(self.local_waypoints)
             distance_to_next_waypoint = np.linalg.norm(
                 self.local_waypoints[next_waypoint_index] - current_position)
+
+            # Check if the next waypoint index has wrapped around to 0
+            if next_waypoint_index == 0:
+                distance_to_next_waypoint = np.linalg.norm(
+                    self.local_waypoints[0] - current_position)
+
             if distance_to_next_waypoint > self.steer_L:
                 break
             closest_waypoint_index = next_waypoint_index
@@ -194,9 +202,8 @@ class RRT(Node):
         self.steer_goal_point_map.y = self.local_waypoints[self.steer_goal_index, 1]
         self.steer_goal_point_map.z = 0.0
 
+
     def pose_callback(self, pose_msg):
-        # Publish the waypoints
-        # self.my_viz.publish_waypoints(self.waypoints)
         
         self.pose_msg = pose_msg
 
@@ -214,11 +221,15 @@ class RRT(Node):
                 print("have waypoint but done steering, thus will rrt")
                 self.rrt()
         else:
-            print("don't have waypoints, thus will rrt")
+            # print("don't have waypoints, thus will rrt", self.local_goal)
             self.stop()
             self.rrt()
         
     def rrt(self):
+        
+        if self.first_grid:
+            return
+
         new_node = None
         while new_node is None:
             self.sample_free_space() # this will set self.chosen_point
@@ -266,23 +277,23 @@ class RRT(Node):
 
             print("found path")
             time.sleep(1)
+            self.done_steering = False
 
             self.my_viz.line_strip_history = MarkerArray()
 
             self.clean_grid()
             
     def sample_free_space(self):
-
         # choose a random point that is not in an occupied cell
 
-        while True:
-            random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
-            self.chosen_point = Point()
-            self.chosen_point.x = random_point[0]
-            self.chosen_point.y = random_point[1]
-            self.chosen_point.z = 0.0
+        # while True:
+        random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+        self.chosen_point = Point()
+        self.chosen_point.x = random_point[0]
+        self.chosen_point.y = random_point[1]
+        self.chosen_point.z = 0.0
             # if not self.check_collision(Point(x = self.current_position[0], y = self.current_position[1], z = 0.0), self.chosen_point):
-            break
+            # break
 
         self.my_viz.publish_marker_history(
             self.chosen_point, frame=self.frame_base_link, color=(1.0, 1.0, 0.0, 1.0), size=0.1)
@@ -299,29 +310,12 @@ class RRT(Node):
 
     def check_collision(self, nearest_node, new_node):
 
-        # Define the line equation parameters (y = mx + c)
         x1, y1 = nearest_node.x, nearest_node.y
         x2, y2 = new_node.x, new_node.y
-
-        # Calculate slope (m)
-        if x2 - x1 != 0:
-            m = (y2 - y1) / (x2 - x1)
-        else:
-            m = np.inf  # Vertical line, handle separately
-
-        # Calculate y-intercept (c)
-        c = y1 - m * x1 if m != np.inf else np.nan  # Handle vertical line case
-
-        # Traverse along the line segment and check each cell in the occupancy grid
-        # num_steps = int(abs(x2 - x1)/self.grid_resolution)
-        # print(f"num_steps is {num_steps}, 1 is {round(x1, 3), round(y1, 3)}, 2 is {round(x2, 3), round(y2, 3)}")
 
         x_step = (x2 - x1) / self.collision_check_step
         y_step = (y2 - y1) / self.collision_check_step
 
-        # if num_steps == 0:
-        #     return False
-        
         for i in range(self.collision_check_step + 1):
             x = x1 + i * x_step
             y = y1 + i * y_step
@@ -329,31 +323,12 @@ class RRT(Node):
             grid_x = np.clip(np.floor((x / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
             grid_y = np.clip(np.floor((y / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
 
-
-            # self.my_viz.grid = self.grid
             rotated_x, rotated_y = grid_y,  grid_x
-            # print("checking point", grid_x, grid_y,
-            #       self.grid[grid_x, grid_y], " rot: ", rotated_x, rotated_y, self.grid[rotated_x, rotated_y])
 
-
-            # Check if the cell is occupied
-            # if self.grid[rotated_x, rotated_y] != 0 :
-            #     print(
-            #         f"collision at {rotated_x}, {rotated_y}, => {self.grid[rotated_x, rotated_y]}")
-            #     return True  # Path is not collision-free
             if self.my_viz.grid[rotated_x, rotated_y] != 0:
-                print(
-                    f"collision at {rotated_x}, {rotated_y}, => {self.my_viz.grid[rotated_x, rotated_y]} ")
+                # print(
+                #     f"collision at {rotated_x}, {rotated_y}, => {self.my_viz.grid[rotated_x, rotated_y]} ")
                 return True  # Path is not collision-free
-            # self.my_viz.grid[rotated_x, rotated_y] = 100
-            # self.my_viz.publish_grid(self.get_clock().now().to_msg())
-            # self.my_viz.grid[rotated_x, rotated_y] = 0
-
-            
-            # self.my_viz.grid[self.grid_size - grid_x, grid_y] = 100
-
-            # wait for user input 
-            # input("Press Enter to continue...")
 
         return False  # Path is collision-free
     
@@ -372,7 +347,7 @@ class RRT(Node):
             # Path is collision-free, proceed with adding the new node
 
             # no optimization
-            # new_node.parent = nearest_node.id
+            new_node.parent = nearest_node.id
 
             # check if parent should be nearest_node or it's parent 
             # if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
@@ -382,28 +357,28 @@ class RRT(Node):
             #     new_node.parent = nearest_node.id
 
             # check if parent should be nearest_node or one of it's ancestors
-            prev = new_node
-            dist = 0
-            if nearest_node.parent:
-                curr_point = self.tree.vertices[nearest_node.parent]
+            # prev = new_node
+            # dist = 0
+            # if nearest_node.parent:
+            #     curr_point = self.tree.vertices[nearest_node.parent]
 
-                while curr_point.parent is not None:
-                    # print(f"Current point is {curr_point.id}")
-                    dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
-                    new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
-                    if dist >= new_dist:
-                        dist = new_dist
-                        new_node.parent = curr_point.id
-                    prev = curr_point
-                    curr_point = self.tree.vertices[curr_point.parent]
-            else:
-                new_node.parent = nearest_node.id
+            #     while curr_point.parent is not None:
+            #         # print(f"Current point is {curr_point.id}")
+            #         dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
+            #         new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
+            #         if dist >= new_dist:
+            #             dist = new_dist
+            #             new_node.parent = curr_point.id
+            #         prev = curr_point
+            #         curr_point = self.tree.vertices[curr_point.parent]
+            # else:
+            #     new_node.parent = nearest_node.id
 
             self.tree.vertices[new_node.id] = new_node
             return new_node
         else:
             # Path is not collision-free, return None or handle accordingly
-            print("path has collision")
+            # print("path has collision")
             return None
 
     def stop(self):
@@ -420,15 +395,16 @@ class RRT(Node):
 
         self.done_steering = False
 
-
         self.get_next_steer_point(self.current_position)
-        # print("selected index:", self.steer_goal_index, "-> ", self.steer_goal_point_map)
-        if LA.norm([self.local_waypoints[-1, 0] - self.current_position[0], self.local_waypoints[-1, 1] - self.current_position[1]]) < self.goal_dist_threshold * 2:
+
+        if LA.norm([self.local_waypoints[-1, 0] - self.current_position[0], self.local_waypoints[-1, 1] - self.current_position[1]]) < self.steer_L:
             self.done_steering = True
-            print("steering complete!")
+            self.local_waypoints = None
+            self.grid = np.zeros(
+                (self.grid_size, self.grid_size), dtype=np.int8)
+            self.stop()
             return
         
-
         # Transform the goal point to the vehicle frame of reference
         transformation = self.transform_goal_point()
 
@@ -467,7 +443,14 @@ class RRT(Node):
             return
         
     def is_goal(self, current_point):
-        dist = LA.norm([current_point.x - self.local_goal[0], current_point.y - self.local_goal[1]])
+
+        self.my_viz.what_are_you(current_point, frame=self.frame_base_link, color=(0.0, 0.0, 1.0, 1.0), size=0.3)
+
+        dist = LA.norm([current_point.x - self.local_goal[0] + self.current_position[0], -current_point.y - self.local_goal[1] + self.current_position[1]])
+        print("current position", self.current_position)
+        print(f"new point {round(current_point.x , 2), round(-current_point.y, 2)} goal {round(self.local_goal[0], 2), round(self.local_goal[1], 2)} dist {round(dist, 2)}")
+        input("press enter")
+
         if dist <= self.goal_dist_threshold:
             return True
         return False
@@ -481,20 +464,6 @@ class RRT(Node):
             current_point = self.tree.vertices[current_point.parent]
 
         path.append(Point(x = 0.0, y = 0.0, z = 0.0))
-
-        # find shortest path 
-        # parent = current_point.parent
-        # dist = 0
-        # while current_point and (current_point.parent is not None):
-        #     dist += LA.norm([current_point.x - self.tree.vertices[parent].x, current_point.y - self.tree.vertices[parent].y])
-        #     current_point = self.tree.vertices[current_point.parent]
-        #     parent = current_point.parent
-
-
-        #     path.append(Point(x=current_point.x, y=current_point.y, z=0.0))
-        #     current_point = self.tree.vertices[current_point.parent]
-
-        # path.append(Point(x=0.0, y=0.0, z=0.0))
 
         return path
 

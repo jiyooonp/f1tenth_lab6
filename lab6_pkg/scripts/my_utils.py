@@ -73,6 +73,10 @@ class MyViz(Node):
             MarkerArray,
             '/waypoints',
             10)
+        self.what_are_you_doing_pub = self.create_publisher(
+            Marker,
+            '/what_are_you_doing',
+            10)
         
         self.randomly_sampled_history = []
         self.line_strip_history = MarkerArray()
@@ -181,6 +185,24 @@ class MyViz(Node):
         marker.color = ColorRGBA(r=color[0], g=color[1], b=color[2], a=color[3])
 
         self.target_point_pub.publish(marker)
+
+    def what_are_you(self, goal_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.3):
+
+        # Publish a marker for the goal point
+        marker = Marker()
+        marker.header.frame_id = frame
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.ns = 'what_are_you_doing'
+        marker.pose.position.x = goal_point.x
+        marker.pose.position.y = goal_point.y
+        marker.pose.position.z = 0.0
+        marker.scale = Vector3(x=size, y=size, z=size)
+        marker.color = ColorRGBA(
+            r=color[0], g=color[1], b=color[2], a=color[3])
+
+        self.what_are_you_doing_pub.publish(marker)
 
     def publish_pp_marker(self, goal_point, frame='ego_racecar/base_link', color=(1.0, 0.0, 0.0, 1.0), size=0.3):
 
