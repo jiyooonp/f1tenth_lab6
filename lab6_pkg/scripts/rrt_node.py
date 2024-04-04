@@ -90,6 +90,8 @@ class RRT(Node):
 
         self.done_steering = False
 
+        self.collision_check_step = 50
+
     def clean_grid(self):
 
         self.tree = MyTree()
@@ -122,14 +124,21 @@ class RRT(Node):
 
         # Perform erosion on the occupancy grid
         self.grid = binary_dilation(
-            self.grid, structure=np.ones((4, 4))).astype(np.int8) 
+            self.grid, structure=np.ones((3, 3))).astype(np.int8) 
         
         self.grid *= 100
 
-        self.my_viz.grid = self.grid
+        self.grid_viz = np.rot90(self.grid, k=1)  # Rotate 180 degrees
+
+        self.my_viz.grid = self.grid_viz
+        print("grid updated")
+
+        # print the indexes
+        for i in range(len(grid_x)):
+            print(f"grid_x: {grid_x[i]}, grid_y: {grid_y[i]}, {self.grid[grid_x[i], grid_y[i]]}")
 
         # Publish occupancy grid
-        self.my_viz.publish_grid(self.get_clock().now().to_msg(), )
+        self.my_viz.publish_grid(self.get_clock().now().to_msg())
 
     def get_next_point(self, current_position):
 
@@ -272,11 +281,11 @@ class RRT(Node):
             self.chosen_point.x = random_point[0]
             self.chosen_point.y = random_point[1]
             self.chosen_point.z = 0.0
-            # if not self.check_collision(self.chosen_point, Point(x = self.current_position[0], y = self.current_position[1], z = 0.0)):
+            # if not self.check_collision(Point(x = self.current_position[0], y = self.current_position[1], z = 0.0), self.chosen_point):
             break
 
         self.my_viz.publish_marker_history(
-            self.chosen_point, frame=self.frame_base_link, color=(0.0, 1.0, 0.0, 0.5), size=0.1)
+            self.chosen_point, frame=self.frame_base_link, color=(1.0, 1.0, 0.0, 1.0), size=0.1)
 
     def get_nearest_node(self):
 
@@ -304,72 +313,97 @@ class RRT(Node):
         c = y1 - m * x1 if m != np.inf else np.nan  # Handle vertical line case
 
         # Traverse along the line segment and check each cell in the occupancy grid
-        num_steps = int(max(abs(x2 - x1), abs(y2 - y1))/self.grid_resolution)
+        # num_steps = int(abs(x2 - x1)/self.grid_resolution)
+        # print(f"num_steps is {num_steps}, 1 is {round(x1, 3), round(y1, 3)}, 2 is {round(x2, 3), round(y2, 3)}")
 
-        x_step = (x2 - x1) / num_steps
-        y_step = (y2 - y1) / num_steps
+        x_step = (x2 - x1) / self.collision_check_step
+        y_step = (y2 - y1) / self.collision_check_step
 
-        if num_steps == 0:
-            return False
+        # if num_steps == 0:
+        #     return False
         
-        for i in range(num_steps + 1):
+        for i in range(self.collision_check_step + 1):
             x = x1 + i * x_step
             y = y1 + i * y_step
-
+            
             grid_x = np.clip(np.floor((x / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
             grid_y = np.clip(np.floor((y / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
 
-            # Check if the cell is occupied
-            if self.grid[grid_x, grid_y] != 0:
-                return False  # Path is not collision-free
 
-        return True  # Path is collision-free
+            # self.my_viz.grid = self.grid
+            rotated_x, rotated_y = grid_y,  grid_x
+            # print("checking point", grid_x, grid_y,
+            #       self.grid[grid_x, grid_y], " rot: ", rotated_x, rotated_y, self.grid[rotated_x, rotated_y])
+
+
+            # Check if the cell is occupied
+            # if self.grid[rotated_x, rotated_y] != 0 :
+            #     print(
+            #         f"collision at {rotated_x}, {rotated_y}, => {self.grid[rotated_x, rotated_y]}")
+            #     return True  # Path is not collision-free
+            if self.my_viz.grid[rotated_x, rotated_y] != 0:
+                print(
+                    f"collision at {rotated_x}, {rotated_y}, => {self.my_viz.grid[rotated_x, rotated_y]} ")
+                return True  # Path is not collision-free
+            # self.my_viz.grid[rotated_x, rotated_y] = 100
+            # self.my_viz.publish_grid(self.get_clock().now().to_msg())
+            # self.my_viz.grid[rotated_x, rotated_y] = 0
+
+            
+            # self.my_viz.grid[self.grid_size - grid_x, grid_y] = 100
+
+            # wait for user input 
+            # input("Press Enter to continue...")
+
+        return False  # Path is collision-free
     
     def update_step_collision(self):
 
         # Get the nearest node from chosen node
         nearest_node = self.tree.vertices[self.nearest_node_id]
 
+        new_node = MyPoint()
+        new_node.x = nearest_node.x + self.move_percentage * (self.chosen_point.x - nearest_node.x)
+        new_node.y = nearest_node.y + self.move_percentage * (self.chosen_point.y - nearest_node.y)
+        new_node.id = len(self.tree.vertices)
+
         # Check if the path to the new node is collision-free
-        if self.check_collision(nearest_node, self.chosen_point):
+        if not self.check_collision(nearest_node, new_node):
             # Path is collision-free, proceed with adding the new node
-            new_node = MyPoint()
-            new_node.x = nearest_node.x + self.move_percentage * (self.chosen_point.x - nearest_node.x)
-            new_node.y = nearest_node.y + self.move_percentage * (self.chosen_point.y - nearest_node.y)
-            new_node.id = len(self.tree.vertices)
 
             # no optimization
             # new_node.parent = nearest_node.id
 
             # check if parent should be nearest_node or it's parent 
-            if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
+            # if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
 
-                new_node.parent = nearest_node.parent
-            else:
-                new_node.parent = nearest_node.id
-
-            # check if parent should be nearest_node or one of it's ancestors
-            # prev = new_node
-            # dist = 0
-            # if nearest_node.parent:
-            #     curr_point = self.tree.vertices[nearest_node.parent]
-
-            #     while curr_point.parent is not None:
-            #         # print(f"Current point is {curr_point.id}")
-            #         dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
-            #         new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
-            #         if dist >= new_dist:
-            #             dist = new_dist
-            #             new_node.parent = curr_point.id
-            #         prev = curr_point
-            #         curr_point = self.tree.vertices[curr_point.parent]
+            #     new_node.parent = nearest_node.parent
             # else:
             #     new_node.parent = nearest_node.id
+
+            # check if parent should be nearest_node or one of it's ancestors
+            prev = new_node
+            dist = 0
+            if nearest_node.parent:
+                curr_point = self.tree.vertices[nearest_node.parent]
+
+                while curr_point.parent is not None:
+                    # print(f"Current point is {curr_point.id}")
+                    dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
+                    new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
+                    if dist >= new_dist:
+                        dist = new_dist
+                        new_node.parent = curr_point.id
+                    prev = curr_point
+                    curr_point = self.tree.vertices[curr_point.parent]
+            else:
+                new_node.parent = nearest_node.id
 
             self.tree.vertices[new_node.id] = new_node
             return new_node
         else:
             # Path is not collision-free, return None or handle accordingly
+            print("path has collision")
             return None
 
     def stop(self):
@@ -407,7 +441,6 @@ class RRT(Node):
             frame=self.frame_base_link, color=(0.2, 1.0, 0.0, 1.0), size=0.4)
 
         # Calculate curvature/steering angle
-        print(f"Goal point is {goal_point_base_link.x}, {goal_point_base_link.y}")
         curvature = 2 * goal_point_base_link.y / self.steer_L ** 2
         curvature = curvature * 0.4
         steering_angle = max(-self.max_steering_angle,
@@ -442,10 +475,27 @@ class RRT(Node):
     def find_path(self, current_point):
         path = []
 
+        # basic code to find the path
         while current_point and (current_point.parent is not None):
             path.append(Point(x=current_point.x, y=current_point.y, z=0.0))
             current_point = self.tree.vertices[current_point.parent]
+
         path.append(Point(x = 0.0, y = 0.0, z = 0.0))
+
+        # find shortest path 
+        # parent = current_point.parent
+        # dist = 0
+        # while current_point and (current_point.parent is not None):
+        #     dist += LA.norm([current_point.x - self.tree.vertices[parent].x, current_point.y - self.tree.vertices[parent].y])
+        #     current_point = self.tree.vertices[current_point.parent]
+        #     parent = current_point.parent
+
+
+        #     path.append(Point(x=current_point.x, y=current_point.y, z=0.0))
+        #     current_point = self.tree.vertices[current_point.parent]
+
+        # path.append(Point(x=0.0, y=0.0, z=0.0))
+
         return path
 
 def main(args=None):

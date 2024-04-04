@@ -125,6 +125,7 @@ class MyViz(Node):
         
         # Add the marker to the history
         self.randomly_sampled_history.append(marker)
+        # self.randomly_sampled_history = [marker]
 
         # Publish the entire history
         marker_array = MarkerArray(markers=self.randomly_sampled_history)
@@ -158,9 +159,9 @@ class MyViz(Node):
         occupancy_grid_msg.info.origin.orientation = q
 
         # Rotate the grid data based on the car's orientation
-        rotated_grid = np.rot90(self.grid, k=1)  # Rotate 180 degrees
+        # rotated_grid = np.rot90(self.grid, k=1)  # Rotate 180 degrees
 
-        occupancy_grid_msg.data = np.ravel(rotated_grid).tolist()
+        occupancy_grid_msg.data = np.ravel(self.grid).tolist()
 
         self.occupancy_pub.publish(occupancy_grid_msg)
 
