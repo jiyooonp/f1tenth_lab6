@@ -49,6 +49,8 @@ class RRT(Node):
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.tf_buffer1 = Buffer()
+        self.tf_listener1 = TransformListener(self.tf_buffer1, self)
 
         # Occupancy grid variables
         self.grid_resolution = 0.1  # meters per cell
@@ -63,7 +65,7 @@ class RRT(Node):
         
         # RRT variables
         self.move_percentage = 0.4
-        self.goal_dist_threshold = 0.2
+        self.goal_dist_threshold = 0.5
 
         self.clean_grid()
 
@@ -262,11 +264,19 @@ class RRT(Node):
             interpolated_path = interpolated_path[::-1]
 
             # add the current_position to make it in the map frame 
-            for point in interpolated_path:
-                point[0] += self.current_position[0]
-                point[1] += self.current_position[1]
+            # Transform the goal point to the vehicle frame of reference
+            transformation = self.transform_goal_point_base_to_map()
 
-            self.local_waypoints = np.array(interpolated_path).reshape(-1, 2)
+            path_in_map = []
+            for point in interpolated_path:
+                goal_point_base_link = do_transform_point(
+                    PointStamped(point=Point(x=point[0], y=point[1], z = 0.0)), transformation)
+
+                goal_point_base_link = goal_point_base_link.point
+                path_in_map.append([goal_point_base_link.x, goal_point_base_link.y])
+                # path_in_map.append([point[0], point[1]])
+
+            self.local_waypoints = np.array(path_in_map).reshape(-1, 2)
             # self.local_waypoints = np.array(path)
 
             # self.publish_line_strip(interpolated_path)
@@ -441,14 +451,36 @@ class RRT(Node):
             self.get_logger().info(
                 f'Could not transform {self.frame_map} to {self.frame_base_link}: {ex}')
             return
+    def transform_goal_point_base_to_map(self):
+        try:
+            t = self.tf_buffer1.lookup_transform(
+                self.frame_map,
+                self.frame_base_link,
+                rclpy.time.Time())
+            return t
+        except TransformException as ex:
+            self.get_logger().info(
+                f'Could not transform {self.frame_base_link} to {self.frame_map}: {ex}')
+            return
         
     def is_goal(self, current_point):
 
+        point = Point(x=self.local_goal[0], y=self.local_goal[1], z=0.0)
+
+        # Transform the goal point to the vehicle frame of reference
+        transformation = self.transform_goal_point()
+
+        goal_point_base_link = do_transform_point(
+            PointStamped(point=point), transformation)
+
+        goal_point_base_link = goal_point_base_link.point
+
         self.my_viz.what_are_you(current_point, frame=self.frame_base_link, color=(0.0, 0.0, 1.0, 1.0), size=0.3)
 
-        dist = LA.norm([current_point.x - self.local_goal[0] + self.current_position[0], -current_point.y - self.local_goal[1] + self.current_position[1]])
+        dist = LA.norm(
+            [current_point.x - goal_point_base_link.x, current_point.y - goal_point_base_link.y])
         print("current position", self.current_position)
-        print(f"new point {round(current_point.x , 2), round(-current_point.y, 2)} goal {round(self.local_goal[0], 2), round(self.local_goal[1], 2)} dist {round(dist, 2)}")
+        print(f"new point {round(current_point.x , 2), round(current_point.y, 2)} goal {round(goal_point_base_link.x, 2), round(goal_point_base_link.y, 2)} dist {round(dist, 2)}")
         input("press enter")
 
         if dist <= self.goal_dist_threshold:
