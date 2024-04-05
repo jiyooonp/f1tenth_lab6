@@ -18,8 +18,6 @@ from tf2_geometry_msgs import do_transform_point
 
 from scipy.ndimage import binary_dilation
 
-import time
-
 from my_utils import MyTree, MyPoint, MyViz
 
 class RRT(Node):
@@ -55,18 +53,19 @@ class RRT(Node):
 
         # Occupancy grid variables
         self.grid_resolution = 0.1  # meters per cell
-        self.grid_size = 60
+        self.grid_size = 50
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8) 
 
         self.my_viz = MyViz()
         self.my_viz.grid_resolution = self.grid_resolution
         self.my_viz.grid_size = self.grid_size
 
-        self.local_goal = [2., 0.]
+        self.local_goal = [1., 0.]
         
         # RRT variables
-        self.move_percentage = 0.4
-        self.goal_dist_threshold = 0.5
+        self.move_percentage = 0.3
+        self.goal_dist_threshold = 0.25
+        self.steer_goal_dist_threshold = 0.5
 
         self.clean_grid()
 
@@ -74,13 +73,12 @@ class RRT(Node):
         self.frame_base_link = 'ego_racecar/base_link'
         self.frame_map = 'map'
 
-        self.L = 2.5
+        self.L = 3.0
 
-        self.steer_L = 0.2
-        self.speed = 0.25
+        self.steer_L = 0.4
+        self.speed = 1.0
 
-        self.steering_angle = 0.0
-        self.max_steering_angle = np.pi / 3
+        self.max_steering_angle = np.pi / 4
 
         # load all the waypoints from the csv file
         self.waypoints = np.genfromtxt(
@@ -96,7 +94,7 @@ class RRT(Node):
         self.done_steering = False
 
         self.collision_check_step = 50
-        self.dilate_size = 5
+        self.dilate_size = 3
 
         self.first_grid = True
 
@@ -127,8 +125,17 @@ class RRT(Node):
         self.y_coords = ranges * -np.sin(angles)
 
         # Convert coordinates to grid indices
-        grid_x = np.clip(np.floor((self.x_coords / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+        grid_x = np.clip(np.floor((self.x_coords / self.grid_resolution)).astype(int), 0, self.grid_size - 1)
         grid_y = np.clip(np.floor((self.y_coords / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+
+        # delete the inf ranges
+        valid_indices_x = grid_x != (self.grid_size - 1 or 0)
+        valid_indices_y = grid_y != (self.grid_size - 1 or 0)
+
+        valid_indices_xy = valid_indices_x & valid_indices_y
+
+        grid_x = grid_x[valid_indices_xy]
+        grid_y = grid_y[valid_indices_xy]
 
         # Update occupancy grid
         self.grid.fill(0)
@@ -177,8 +184,13 @@ class RRT(Node):
         
 
     def get_next_steer_point(self, current_position):
+        # Find the closest waypoint to the current position
+        distances = np.linalg.norm(
+            self.local_waypoints - current_position, axis=1)
+        closest_waypoint_index = np.argmin(distances)
+        # print(f"Closest waypoint index is {closest_waypoint_index}, steer goal index is {self.steer_goal_index}")
 
-        closest_waypoint_index = self.steer_goal_index -1 # np.argmin(distances)
+        closest_waypoint_index = max(closest_waypoint_index, self.steer_goal_index -1) # np.argmin(distances)
 
         # Find the next waypoint to track
         while True and (self.local_waypoints is not None):
@@ -225,17 +237,20 @@ class RRT(Node):
         if self.first_grid:
             return
 
-        new_node = None
-        while new_node is None:
+        new_nodes = None
+        while new_nodes is None:
             self.sample_free_space() # this will set self.chosen_point
             self.get_nearest_node() # this will set self.nearest_node_id
 
         #   go move_percentage of the way from nearest_node to chosen_point, add to tree
-            new_node = self.update_step_collision()  # this adds to the tree
-    
-        path = self.find_path(new_node)
+            # new_node = self.update_step_collision()  # this adds to the tree
+            new_nodes = self.update_step_collision()  # this adds to the tree
 
-        self.my_viz.publish_line_strip(path, self.get_clock().now().to_msg())
+        for i, new_node in enumerate(new_nodes):
+            path = self.find_path(new_node)
+            self.my_viz.publish_line_strip(path, i)
+
+        new_node = new_nodes[-1]
 
         #  check if new_node is in goal_range
         if self.is_goal(new_node):
@@ -250,8 +265,6 @@ class RRT(Node):
                 interpolated_path.append([path[i].x, path[i].y])
                 interpolated_path.append([(path[i].x + path[i+1].x)/2, (path[i].y + path[i+1].y)/2])
             interpolated_path.append([path[-1].x, path[-1].y])
-
-            print(f"interp path is {len(interpolated_path)} long")
 
             # reverse the path
             interpolated_path = interpolated_path[::-1]
@@ -276,6 +289,7 @@ class RRT(Node):
             print("found path")
             # time.sleep(1)
             self.done_steering = False
+            self.steer_goal_index = 1
 
             self.my_viz.line_strip_history = MarkerArray()
 
@@ -284,10 +298,11 @@ class RRT(Node):
     def sample_free_space(self):
         # choose a random point that is not in an occupied cell
 
-        random_point = np.random.rand(2) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2
+        random_point = [np.random.rand(1)*self.grid_size*self.grid_resolution, np.random.rand(
+            1) * self.grid_size*self.grid_resolution - self.grid_size*self.grid_resolution/2.0]
         self.chosen_point = Point()
-        self.chosen_point.x = random_point[0]
-        self.chosen_point.y = random_point[1]
+        self.chosen_point.x = float(random_point[0])
+        self.chosen_point.y = float(random_point[1])
         self.chosen_point.z = 0.0
 
         self.my_viz.publish_marker_history(
@@ -315,7 +330,7 @@ class RRT(Node):
             x = x1 + i * x_step
             y = y1 + i * y_step
             
-            grid_x = np.clip(np.floor((x / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
+            grid_x = np.clip(np.floor((x / self.grid_resolution)).astype(int), 0, self.grid_size - 1)
             grid_y = np.clip(np.floor((y / self.grid_resolution) + (self.grid_size / 2)).astype(int), 0, self.grid_size - 1)
 
             rotated_x, rotated_y = grid_y,  grid_x
@@ -329,11 +344,18 @@ class RRT(Node):
 
         # Get the nearest node from chosen node
         nearest_node = self.tree.vertices[self.nearest_node_id]
-
         new_node = MyPoint()
         new_node.x = nearest_node.x + self.move_percentage * (self.chosen_point.x - nearest_node.x)
         new_node.y = nearest_node.y + self.move_percentage * (self.chosen_point.y - nearest_node.y)
         new_node.id = len(self.tree.vertices)
+
+        new_straight_node = MyPoint()
+        new_straight_node.x = nearest_node.x + self.move_percentage * \
+            (self.chosen_point.x - nearest_node.x)
+        new_straight_node.y = nearest_node.y + self.move_percentage * \
+            (self.chosen_point.y - nearest_node.y)
+        new_straight_node.id = len(self.tree.vertices)+1
+        
 
         # Check if the path to the new node is collision-free
         if not self.check_collision(nearest_node, new_node):
@@ -341,6 +363,35 @@ class RRT(Node):
 
             # no optimization
             new_node.parent = nearest_node.id
+            self.tree.vertices[new_node.id] = new_node
+        
+            # add optimization additionally 
+            # check if parent should be nearest_node or one of it's ancestors
+            new_straight_node.parent = nearest_node.id
+            prev = new_straight_node
+            dist = 0
+            if nearest_node.parent:
+                curr_point = self.tree.vertices[nearest_node.parent]
+
+                while curr_point.parent is not None:
+                    dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
+                    new_dist = LA.norm(
+                        [new_straight_node.x - curr_point.x, new_straight_node.y - curr_point.y])
+                    if dist >= new_dist and not self.check_collision(curr_point, new_straight_node):
+                        dist = new_dist
+                        new_straight_node.parent = curr_point.id
+                    prev = curr_point
+                    curr_point = self.tree.vertices[curr_point.parent]
+
+                wanted_xy = self.path_contains_goal(new_straight_node)
+
+                if wanted_xy is not None:
+                    wanted_x, wanted_y = wanted_xy
+                    new_straight_node.x = wanted_x
+                    new_straight_node.y = wanted_y
+            else:
+                new_straight_node.parent = nearest_node.id
+            self.tree.vertices[new_straight_node.id] = new_straight_node
 
             # check if parent should be nearest_node or it's parent 
             # if nearest_node.parent and LA.norm([new_node.x - nearest_node.x, new_node.y - nearest_node.y]) > LA.norm([nearest_node.x - self.tree.vertices[nearest_node.parent].x, nearest_node.y - self.tree.vertices[nearest_node.parent].y]):
@@ -349,26 +400,11 @@ class RRT(Node):
             # else:
             #     new_node.parent = nearest_node.id
 
-            # check if parent should be nearest_node or one of it's ancestors
-            # prev = new_node
-            # dist = 0
-            # if nearest_node.parent:
-            #     curr_point = self.tree.vertices[nearest_node.parent]
-
-            #     while curr_point.parent is not None:
-            #         # print(f"Current point is {curr_point.id}")
-            #         dist += LA.norm([prev.x - curr_point.x, prev.y - curr_point.y])
-            #         new_dist = LA.norm([new_node.x - curr_point.x, new_node.y - curr_point.y])
-            #         if dist >= new_dist:
-            #             dist = new_dist
-            #             new_node.parent = curr_point.id
-            #         prev = curr_point
-            #         curr_point = self.tree.vertices[curr_point.parent]
-            # else:
-            #     new_node.parent = nearest_node.id
-
-            self.tree.vertices[new_node.id] = new_node
-            return new_node
+            # return new_straight_node
+            return_nodes = []
+            for i in range(new_node.id, new_straight_node.id+1):
+                return_nodes.append(self.tree.vertices[i])
+            return return_nodes
         else:
             # Path is not collision-free, return None or handle accordingly
             return None
@@ -391,7 +427,7 @@ class RRT(Node):
 
         distance_to_local_goal = LA.norm([self.local_waypoints[-1, 0] - self.current_position[0], self.local_waypoints[-1, 1] - self.current_position[1]])
 
-        if distance_to_local_goal < self.goal_dist_threshold:
+        if distance_to_local_goal < self.steer_goal_dist_threshold:
             self.done_steering = True
             self.local_waypoints = None
             self.grid = np.zeros(
@@ -446,7 +482,30 @@ class RRT(Node):
             self.get_logger().info(
                 f'Could not transform {self.frame_base_link} to {self.frame_map}: {ex}')
             return
+    
+    def path_contains_goal(self, some_node):
+        parent_node = self.tree.vertices[some_node.parent]
+
+        if parent_node is None or self.local_waypoints is None:
+            return None
+
+        x1, y1 = parent_node.x, parent_node.y
+        x2, y2 = some_node.x, some_node.y
+
+        x_step = (x2 - x1) / self.collision_check_step
+        y_step = (y2 - y1) / self.collision_check_step
+
+        for i in range(self.collision_check_step + 1):
+            x = x1 + i * x_step
+            y = y1 + i * y_step
+
+            dist = LA.norm([x - self.local_waypoints[-1, 0],
+                           y - self.local_waypoints[-1, 1]])
+            if dist <= self.steer_goal_dist_threshold*2:
+                return (x, y)
         
+        return None
+    
     def is_goal(self, current_point):
 
         point = Point(x=self.local_goal[0], y=self.local_goal[1], z=0.0)

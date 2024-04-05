@@ -87,6 +87,12 @@ class MyViz(Node):
         self.grid_resolution = 0.1  # meters per cell
         self.grid_size = 100
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8)
+
+        self.colors = [
+            (0.7, 0.7, 0.0, 1.0),
+            (0.7, 0.0, 0.7, 0.3) # Purple
+        ]
+        
         
     def publish_waypoints(self, waypoints):
 
@@ -145,8 +151,7 @@ class MyViz(Node):
         occupancy_grid_msg.info.resolution = self.grid_resolution
         occupancy_grid_msg.info.width = self.grid_size
         occupancy_grid_msg.info.height = self.grid_size
-        occupancy_grid_msg.info.origin.position.x = - \
-            self.grid_size / 2 * self.grid_resolution
+        occupancy_grid_msg.info.origin.position.x = 0.0
         occupancy_grid_msg.info.origin.position.y = - \
             self.grid_size / 2 * self.grid_resolution
         occupancy_grid_msg.info.origin.position.z = 0.0
@@ -222,18 +227,20 @@ class MyViz(Node):
 
         self.target_point_pp_pub.publish(marker)
 
-    def publish_line_strip(self, points, time_stamp):
+    def publish_line_strip(self, points, color_index):
+        if color_index >= len(self.colors):
+            color_index = 1
 
         marker = Marker()
         marker.header.frame_id = self.frame_base_link  # Change to your desired frame
-        marker.header.stamp = time_stamp
         marker.ns = 'line_strip'
         marker.id = len(self.line_strip_history.markers)
         marker.type = Marker.LINE_STRIP
         marker.action = Marker.ADD
         marker.pose.orientation.w = 1.0
         marker.scale.x = 0.1  # Line width
-        marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)    
+        marker.color = ColorRGBA(
+            r=self.colors[color_index][0], g=self.colors[color_index][1], b=self.colors[color_index][2], a=self.colors[color_index][3])
 
         # Define the line strip points
         for point in points:

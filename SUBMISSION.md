@@ -1,8 +1,8 @@
-# Lab 1: Automatic Emergency Braking
+# Lab 6: Motion Planning (RRT)
 
-## Video Link
-(FILL ME IN)
+[RRT in RViz](https://youtu.be/ws4dDGiohw4)
 
+[RRT on Hardware](https://www.youtube.com/watch?v=JvZ5VUmy-5g)
 
 
 IDEA:
