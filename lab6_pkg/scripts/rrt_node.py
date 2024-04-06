@@ -184,11 +184,11 @@ class RRT(Node):
         
 
     def get_next_steer_point(self, current_position):
+
         # Find the closest waypoint to the current position
         distances = np.linalg.norm(
             self.local_waypoints - current_position, axis=1)
         closest_waypoint_index = np.argmin(distances)
-        # print(f"Closest waypoint index is {closest_waypoint_index}, steer goal index is {self.steer_goal_index}")
 
         closest_waypoint_index = max(closest_waypoint_index, self.steer_goal_index -1) # np.argmin(distances)
 
@@ -243,12 +243,15 @@ class RRT(Node):
             self.get_nearest_node() # this will set self.nearest_node_id
 
         #   go move_percentage of the way from nearest_node to chosen_point, add to tree
-            # new_node = self.update_step_collision()  # this adds to the tree
             new_nodes = self.update_step_collision()  # this adds to the tree
 
-        for i, new_node in enumerate(new_nodes):
-            path = self.find_path(new_node)
-            self.my_viz.publish_line_strip(path, i)
+        # laggy in vizualization
+        # for i, new_node in enumerate(new_nodes):
+        #     path = self.find_path(new_node)
+        #     self.my_viz.publish_line_strip(path, i)
+
+        path = self.find_path(new_nodes[0])
+        self.my_viz.publish_line_strip(path, 0)
 
         new_node = new_nodes[-1]
 
@@ -279,15 +282,12 @@ class RRT(Node):
 
                 goal_point_base_link = goal_point_base_link.point
                 path_in_map.append([goal_point_base_link.x, goal_point_base_link.y])
-                # path_in_map.append([point[0], point[1]])
 
             self.local_waypoints = np.array(path_in_map).reshape(-1, 2)
             # self.my_viz.publish_waypoint_sphere(self.local_waypoints, frame='map', color=(0.0, 1.0, 1.0, 1.0), size=0.3)
             self.my_viz.publish_waypoint_strip(self.local_waypoints)
 
             # steer to path using pure pursuit
-            print("found path")
-            # time.sleep(1)
             self.done_steering = False
             self.steer_goal_index = 1
 

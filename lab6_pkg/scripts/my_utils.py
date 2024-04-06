@@ -89,7 +89,7 @@ class MyViz(Node):
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8)
 
         self.colors = [
-            (0.7, 0.7, 0.0, 1.0),
+            (1.0, 0.2, 0.0, 1.0),
             (0.7, 0.0, 0.7, 0.3) # Purple
         ]
         
